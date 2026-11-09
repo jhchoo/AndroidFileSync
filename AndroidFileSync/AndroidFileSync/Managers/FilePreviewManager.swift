@@ -19,6 +19,7 @@ enum PreviewContent: Equatable {
     case videoThumbnail(NSImage)
     case videoReady(URL)         // Full video file available for inline playback
     case pdfReady(URL)           // Full PDF file available for PDFKit viewer
+    case quickLookReady(URL)     // Full document file available for QuickLook viewer
     case audioIcon
     case documentIcon(String) // extension
     case loading
@@ -39,6 +40,8 @@ enum PreviewContent: Equatable {
         case (.videoReady(let a), .videoReady(let b)):
             return a == b
         case (.pdfReady(let a), .pdfReady(let b)):
+            return a == b
+        case (.quickLookReady(let a), .quickLookReady(let b)):
             return a == b
         default:
             return false
@@ -61,9 +64,10 @@ enum PreviewFileCategory: String {
             self = .audio
         case "pdf":
             self = .pdf
-        case "txt", "rtf", "html", "htm", "md", "json", "xml", "csv",
-             "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-             "swift", "java", "py", "js", "ts", "c", "cpp", "h", "css":
+        case "txt", "rtf", "rtfd", "html", "htm", "md", "markdown", "json", "xml", "csv", "tsv",
+             "doc", "docx", "dot", "dotx", "xls", "xlsx", "xlsm", "xlsb", "ppt", "pptx", "pps", "ppsx", "pot", "potx",
+             "pages", "numbers", "key", "keynote", "epub", "log", "yaml", "yml", "plist",
+             "swift", "java", "py", "js", "ts", "c", "cpp", "h", "hpp", "css", "sh", "bash", "zsh":
             self = .document
         default:
             self = .unknown
@@ -91,7 +95,9 @@ enum PreviewFileCategory: String {
 /// Manages file preview with a tiered strategy:
 /// - Images: piped directly via `adb exec-out cat` → `NSImage`
 /// - Videos: partial pull (first 4 MB) → `AVAssetImageGenerator` thumbnail
-/// - Audio/Documents: show icon + metadata instantly (no pull needed)
+/// - PDF: full pull → native PDFKit interactive viewer with thumbnail sidebar & controls
+/// - Documents (Word, Excel, PowerPoint, text, etc.): full pull → native QuickLook viewer
+/// - Audio: show icon + metadata
 ///
 /// All UI state is `@MainActor`-isolated to ensure thread-safe `@Published` updates.
 @MainActor
@@ -147,11 +153,16 @@ class FilePreviewManager: ObservableObject {
         // Audio
         "mp3", "m4a", "wav", "flac", "aac", "ogg",
         // Documents
-        "pdf", "txt", "rtf", "html", "htm", "md", "json", "xml", "csv",
-        // Office
-        "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-        // Code
-        "swift", "java", "py", "js", "ts", "c", "cpp", "h", "css"
+        "pdf", "txt", "rtf", "rtfd", "html", "htm", "md", "markdown", "json", "xml", "csv", "tsv",
+        // Office (Word, Excel, PowerPoint)
+        "doc", "docx", "dot", "dotx",
+        "xls", "xlsx", "xlsm", "xlsb",
+        "ppt", "pptx", "pps", "ppsx", "pot", "potx",
+        // Apple iWork & eBooks
+        "pages", "numbers", "key", "keynote", "epub",
+        // Code & Config
+        "swift", "java", "py", "js", "ts", "c", "cpp", "h", "hpp", "css", "sh", "bash", "zsh",
+        "log", "yaml", "yml", "plist"
     ]
     
     // MARK: - Public API
@@ -168,13 +179,21 @@ class FilePreviewManager: ObservableObject {
         }
         
         let category = PreviewFileCategory(extension: file.pathExtension)
+        let cleanPath = FileNameHelper.cleanRemotePath(file.path)
         
-        // Check file cache first — cached videos and PDFs open instantly on re-open
-        if (category == .video || category == .pdf),
-           let cachedURL = fileCache[file.path],
+        // Check file cache first — cached videos, PDFs, and documents open instantly on re-open
+        if (category == .video || category == .pdf || category == .document),
+           let cachedURL = fileCache[file.path] ?? fileCache[cleanPath],
            FileManager.default.fileExists(atPath: cachedURL.path) {
             previewFile = file
-            previewContent = (category == .pdf) ? .pdfReady(cachedURL) : .videoReady(cachedURL)
+            switch category {
+            case .pdf:
+                previewContent = .pdfReady(cachedURL)
+            case .video:
+                previewContent = .videoReady(cachedURL)
+            default:
+                previewContent = .quickLookReady(cachedURL)
+            }
             showPreviewPanel = true
             return
         }
@@ -215,10 +234,12 @@ class FilePreviewManager: ObservableObject {
                 await generateVideoThumbnail(file)
             case .pdf:
                 await loadPDFPreview(file)
+            case .document:
+                await loadQuickLookPreview(file)
             case .audio:
                 previewContent = .audioIcon
                 isLoading = false
-            case .document, .unknown:
+            case .unknown:
                 previewContent = .documentIcon(file.pathExtension)
                 isLoading = false
             }
@@ -253,8 +274,9 @@ class FilePreviewManager: ObservableObject {
     func openInExternalApp() {
         guard let file = previewFile else { return }
         
+        let cleanPath = FileNameHelper.cleanRemotePath(file.path)
         // Check file cache — if already pulled, open immediately
-        if let cached = fileCache[file.path], FileManager.default.fileExists(atPath: cached.path) {
+        if let cached = fileCache[file.path] ?? fileCache[cleanPath], FileManager.default.fileExists(atPath: cached.path) {
             NSWorkspace.shared.open(cached)
             return
         }
@@ -278,11 +300,11 @@ class FilePreviewManager: ObservableObject {
             var (code, _, error, _) = await Shell.runWithProgressCancellable(
                 adbPath,
                 args: ADBManager.deviceArgs(["pull", cleanDevicePath, localURL.path]),
-                progressCallback: { [weak self] text in
-                    self?.parseAndUpdateProgress(text)
+                progressCallback: { [self] text in
+                    parseAndUpdateProgress(text)
                 },
-                cancellationCheck: { [weak self] in
-                    self?.cancellationRequested ?? false
+                cancellationCheck: { [self] in
+                    cancellationRequested
                 }
             )
 
@@ -295,11 +317,11 @@ class FilePreviewManager: ObservableObject {
                     let (retryCode, _, retryErr, _) = await Shell.runWithProgressCancellable(
                         adbPath,
                         args: ADBManager.deviceArgs(["pull", altPath, localURL.path]),
-                        progressCallback: { [weak self] text in
-                            self?.parseAndUpdateProgress(text)
+                        progressCallback: { [self] text in
+                            parseAndUpdateProgress(text)
                         },
-                        cancellationCheck: { [weak self] in
-                            self?.cancellationRequested ?? false
+                        cancellationCheck: { [self] in
+                            cancellationRequested
                         }
                     )
                     if retryCode == 0 {
@@ -329,6 +351,87 @@ class FilePreviewManager: ObservableObject {
     }
     
     // MARK: - Tiered Preview Methods
+
+    /// Load document preview by pulling the file to temp directory for QuickLook viewing.
+    /// Supports Word (doc/docx), Excel (xls/xlsx), PowerPoint (ppt/pptx), and other office/text documents.
+    private func loadQuickLookPreview(_ file: UnifiedFile) async {
+        let adbPath = ADBManager.getADBPath()
+        guard !adbPath.isEmpty else {
+            previewContent = .error("ADB not found")
+            isLoading = false
+            return
+        }
+
+        let cleanDevicePath = FileNameHelper.cleanRemotePath(file.path)
+        let cleanFileName = FileNameHelper.cleanFileName(file.name)
+
+        // Check cache first
+        if let cachedURL = fileCache[cleanDevicePath] ?? fileCache[file.path], FileManager.default.fileExists(atPath: cachedURL.path) {
+            isLoading = false
+            previewContent = .quickLookReady(cachedURL)
+            return
+        }
+
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let localURL = tempDir.appendingPathComponent(cleanFileName)
+        try? FileManager.default.removeItem(at: localURL)
+
+        isLoadingFullFile = true
+        fullFilePullProgress = "문서 불러오는 중..."
+
+        var (code, _, error, _) = await Shell.runWithProgressCancellable(
+            adbPath,
+            args: ADBManager.deviceArgs(["pull", cleanDevicePath, localURL.path]),
+            progressCallback: { [weak self] text in
+                self?.parseAndUpdateProgress(text)
+            },
+            cancellationCheck: { [weak self] in
+                self?.cancellationRequested ?? false
+            }
+        )
+
+        // If pulling failed due to file not found, retry with complementary Unicode normalization (NFC <-> NFD)
+        if code != 0 && (error.contains("failed to stat") || error.contains("No such file or directory")) {
+            let altPath = cleanDevicePath == cleanDevicePath.precomposedStringWithCanonicalMapping
+                ? cleanDevicePath.decomposedStringWithCanonicalMapping
+                : cleanDevicePath.precomposedStringWithCanonicalMapping
+            if altPath != cleanDevicePath {
+                let (retryCode, _, retryErr, _) = await Shell.runWithProgressCancellable(
+                    adbPath,
+                    args: ADBManager.deviceArgs(["pull", altPath, localURL.path]),
+                    progressCallback: { [weak self] text in
+                        self?.parseAndUpdateProgress(text)
+                    },
+                    cancellationCheck: { [weak self] in
+                        self?.cancellationRequested ?? false
+                    }
+                )
+                if retryCode == 0 {
+                    code = 0
+                    error = ""
+                } else {
+                    error = retryErr
+                }
+            }
+        }
+
+        isLoadingFullFile = false
+        isLoading = false
+
+        guard !Task.isCancelled, !cancellationRequested else {
+            try? FileManager.default.removeItem(at: localURL)
+            return
+        }
+
+        if code == 0, FileManager.default.fileExists(atPath: localURL.path) {
+            fileCache[cleanDevicePath] = localURL
+            fileCache[file.path] = localURL
+            previewContent = .quickLookReady(localURL)
+        } else {
+            print("❌ Preview: Failed to pull/open document: code=\(code), error=\(error)")
+            previewContent = .error("문서를 불러올 수 없습니다: \(error.isEmpty ? "알 수 없는 오류" : error)")
+        }
+    }
 
     /// Load PDF preview by pulling the file to temp directory for PDFKit viewing.
     private func loadPDFPreview(_ file: UnifiedFile) async {
@@ -791,9 +894,9 @@ class FilePreviewManager: ObservableObject {
     }
     
     /// Check if a file type is previewable
-    nonisolated static func isPreviewable(_ file: UnifiedFile) -> Bool {
+    static func isPreviewable(_ file: UnifiedFile) -> Bool {
         guard !file.isDirectory else { return false }
-        return previewableExtensions.contains(file.pathExtension)
+        return previewableExtensions.contains(file.pathExtension.lowercased())
     }
     
     // MARK: - Cleanup

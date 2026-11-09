@@ -536,11 +536,10 @@ struct ContentView: View {
                 handlePermanentDeleteShortcut()
             }
             .onReceive(NotificationCenter.default.publisher(for: .afsMouseNavigateBack)) { _ in
-                handleMouseBack()
+                handleMouseBackButton()
             }
             .onReceive(NotificationCenter.default.publisher(for: .afsMouseNavigateForward)) { _ in
-                guard activeAppFilter == nil else { return }
-                navigateForward()
+                handleMouseForwardButton()
             }
             .onReceive(NotificationCenter.default.publisher(for: .afsDeletionsChanged)) { _ in
                 updateDisplayedFiles()
@@ -1757,8 +1756,7 @@ struct ContentView: View {
     }
 
     private func handleMouseBack() {
-        guard activeAppFilter == nil else { return }
-        handleNavigateUp()
+        handleMouseBackButton()
     }
 
     private func handleNavigateUp() {
@@ -2345,6 +2343,11 @@ struct ContentView: View {
     private func handleMouseBackButton() {
         if filePreviewManager.showPreviewPanel {
             filePreviewManager.dismissPreview()
+            return
+        }
+        if filePreviewManager.isLoading {
+            filePreviewManager.cancelPreview()
+            return
         }
         if showTrashView {
             showTrashView = false
@@ -2354,13 +2357,24 @@ struct ContentView: View {
             activeAppFilter = nil
             return
         }
-        navigateBack()
+        if isDualPaneEnabled && activePane == .secondary {
+            if !secondaryPathHistory.isEmpty {
+                navigateSecondaryBack()
+            } else {
+                handleNavigateUp()
+            }
+        } else {
+            if !pathHistory.isEmpty {
+                navigateBack()
+            } else {
+                handleNavigateUp()
+            }
+        }
     }
 
     private func handleMouseForwardButton() {
-        if !filePreviewManager.showPreviewPanel && !showTrashView && activeAppFilter == nil {
-            navigateForward()
-        }
+        guard !filePreviewManager.showPreviewPanel, !filePreviewManager.isLoading, !showTrashView, activeAppFilter == nil else { return }
+        navigateForward()
     }
     
     // MARK: - Diagnostic Upload Helpers

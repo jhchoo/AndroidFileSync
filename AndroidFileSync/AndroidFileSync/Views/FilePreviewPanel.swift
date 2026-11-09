@@ -10,6 +10,8 @@
 import SwiftUI
 import AVKit
 import PDFKit
+import QuickLookUI
+import WebKit
 internal import Combine
 
 // MARK: - Preview Panel
@@ -17,6 +19,7 @@ internal import Combine
 struct FilePreviewPanel: View {
     @ObservedObject var previewManager: FilePreviewManager
     @StateObject private var pdfCoordinator = PDFPreviewCoordinator()
+    @StateObject private var quickLookCoordinator = QuickLookPreviewCoordinator()
     
     @State private var appeared = false
     @State private var imageScale: CGFloat = 1.0
@@ -48,10 +51,27 @@ struct FilePreviewPanel: View {
             }
             if isPDFPreview {
                 pdfCoordinator.startKeyMonitoring()
+            } else if isQuickLookPreview {
+                quickLookCoordinator.startKeyMonitoring()
             }
         }
         .onDisappear {
+            pdfCoordinator.saveCurrentLocation()
             pdfCoordinator.stopKeyMonitoring()
+            quickLookCoordinator.stopKeyMonitoring()
+        }
+        .onChange(of: previewManager.previewContent) { newContent in
+            if case .pdfReady = newContent {
+                pdfCoordinator.startKeyMonitoring()
+                quickLookCoordinator.stopKeyMonitoring()
+            } else if case .quickLookReady = newContent {
+                quickLookCoordinator.resetZoom()
+                quickLookCoordinator.startKeyMonitoring()
+                pdfCoordinator.stopKeyMonitoring()
+            } else {
+                pdfCoordinator.stopKeyMonitoring()
+                quickLookCoordinator.stopKeyMonitoring()
+            }
         }
         .onExitCommand { dismiss() }
     }
@@ -73,6 +93,11 @@ struct FilePreviewPanel: View {
     
     private var isPDFPreview: Bool {
         if case .pdfReady = previewManager.previewContent { return true }
+        return false
+    }
+
+    private var isQuickLookPreview: Bool {
+        if case .quickLookReady = previewManager.previewContent { return true }
         return false
     }
 
@@ -108,11 +133,13 @@ struct FilePreviewPanel: View {
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .frame(maxWidth: isPDFPreview ? 180 : 380, alignment: .leading)
+                .frame(maxWidth: (isPDFPreview || isQuickLookPreview) ? 180 : 380, alignment: .leading)
             
             // PDF 확대/축소 및 가로/세로 맞춤 컨트롤 바 (네비게이션바 좌측 영역)
             if isPDFPreview {
                 PDFZoomControlBar(coordinator: pdfCoordinator)
+            } else if isQuickLookPreview {
+                QuickLookZoomControlBar(coordinator: quickLookCoordinator)
             }
 
             Spacer()
@@ -146,15 +173,45 @@ struct FilePreviewPanel: View {
     
     @ViewBuilder
     private var categoryIcon: some View {
-        let category = previewManager.previewFile.map {
-            PreviewFileCategory(extension: $0.pathExtension)
-        } ?? .unknown
-        
-        Image(systemName: category.symbolName)
+        let ext = previewManager.previewFile?.pathExtension ?? ""
+        Image(systemName: iconName(for: ext))
+            .font(.system(size: 14))
             .symbolRenderingMode(.hierarchical)
-            .foregroundStyle(iconColor(for: category))
+            .foregroundStyle(iconColor(for: ext))
     }
-    
+
+    private func iconName(for ext: String) -> String {
+        switch ext.lowercased() {
+        case "doc", "docx", "dot", "dotx":
+            return "doc.richtext"
+        case "xls", "xlsx", "xlsm", "xlsb", "csv", "tsv":
+            return "tablecells"
+        case "ppt", "pptx", "pps", "ppsx", "pot", "potx":
+            return "rectangle.on.rectangle"
+        case "pdf":
+            return "doc.richtext"
+        default:
+            let category = PreviewFileCategory(extension: ext)
+            return category.symbolName
+        }
+    }
+
+    private func iconColor(for ext: String) -> Color {
+        switch ext.lowercased() {
+        case "doc", "docx", "dot", "dotx":
+            return .blue
+        case "xls", "xlsx", "xlsm", "xlsb", "csv", "tsv":
+            return .green
+        case "ppt", "pptx", "pps", "ppsx", "pot", "potx":
+            return .orange
+        case "pdf":
+            return .red
+        default:
+            let category = PreviewFileCategory(extension: ext)
+            return iconColor(for: category)
+        }
+    }
+
     private func iconColor(for category: PreviewFileCategory) -> Color {
         switch category {
         case .image: return .blue
@@ -181,6 +238,8 @@ struct FilePreviewPanel: View {
             inlineVideoPlayer(url: url)
         case .pdfReady(let url):
             pdfPreview(url: url)
+        case .quickLookReady(let url):
+            quickLookPreview(url: url)
         case .audioIcon:
             audioPreview
         case .documentIcon(let ext):
@@ -196,7 +255,7 @@ struct FilePreviewPanel: View {
         VStack(spacing: 16) {
             LoadingSpinner(size: 28)
             
-            Text("Loading preview…")
+            Text(previewManager.fullFilePullProgress.isEmpty ? "Loading preview…" : previewManager.fullFilePullProgress)
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
         }
@@ -359,6 +418,16 @@ struct FilePreviewPanel: View {
         .accessibilityLabel("PDF Document Preview")
     }
     
+    // MARK: - QuickLook Preview
+
+    private func quickLookPreview(url: URL) -> some View {
+        QuickLookRepresentable(url: url, coordinator: quickLookCoordinator)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .transition(.opacity)
+            .accessibilityLabel("Document Preview")
+    }
+
     // MARK: - Audio Preview
     
     private var audioPreview: some View {
@@ -378,7 +447,7 @@ struct FilePreviewPanel: View {
         .accessibilityLabel("Audio file preview")
     }
     
-    // MARK: - Document Preview
+    // MARK: - Document Preview (Fallback)
     
     private func documentPreview(_ ext: String) -> some View {
         VStack(spacing: 20) {
@@ -405,9 +474,9 @@ struct FilePreviewPanel: View {
     @ViewBuilder
     private var fileInfoStack: some View {
         if let file = previewManager.previewFile {
-            VStack(spacing: 4) {
+            VStack(spacing: 6) {
                 Text(file.name)
-                    .font(.system(size: 15, weight: .medium))
+                    .font(.system(size: 15, weight: .semibold))
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
                 
@@ -427,13 +496,20 @@ struct FilePreviewPanel: View {
     private func documentSymbol(for ext: String) -> String {
         switch ext.lowercased() {
         case "pdf":                              return "doc.richtext"
-        case "txt", "md", "rtf":                 return "doc.text"
+        case "doc", "docx", "dot", "dotx":       return "doc.richtext"
+        case "xls", "xlsx", "xlsm", "xlsb",
+             "csv", "tsv":                       return "tablecells"
+        case "ppt", "pptx", "pps", "ppsx",
+             "pot", "potx":                      return "rectangle.on.rectangle"
+        case "pages":                            return "doc.richtext"
+        case "numbers":                          return "tablecells"
+        case "key", "keynote":                   return "rectangle.on.rectangle"
+        case "txt", "md", "markdown", "rtf", "rtfd": return "doc.text"
         case "html", "htm":                      return "globe"
-        case "json", "xml", "csv":               return "tablecells"
-        case "xls", "xlsx":                      return "tablecells"
-        case "ppt", "pptx":                      return "rectangle.on.rectangle"
+        case "json", "xml", "yaml", "yml", "plist": return "curlybraces"
         case "swift", "java", "py", "js", "ts",
-             "c", "cpp", "h", "css":             return "chevron.left.forwardslash.chevron.right"
+             "c", "cpp", "h", "hpp", "css",
+             "sh", "bash", "zsh":                return "chevron.left.forwardslash.chevron.right"
         default:                                 return "doc"
         }
     }
@@ -505,6 +581,7 @@ struct FilePreviewPanel: View {
     private func dismiss() {
         pdfCoordinator.saveCurrentLocation()
         pdfCoordinator.stopKeyMonitoring()
+        quickLookCoordinator.stopKeyMonitoring()
         withAnimation(.spring(response: 0.2, dampingFraction: 0.9)) {
             appeared = false
         }
@@ -572,9 +649,18 @@ final class PDFPreviewCoordinator: ObservableObject {
 
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
-        // Cmd + Up / Cmd + Down -> First / Last page
+        // Cmd shortcuts
         if flags.contains(.command) && flags.intersection([.option, .control]).isEmpty {
             switch event.keyCode {
+            case 24, 69: // Cmd + Plus / Equal / Keypad Plus
+                zoomIn()
+                return nil
+            case 27, 78: // Cmd + Minus / Keypad Minus
+                zoomOut()
+                return nil
+            case 29: // Cmd + 0 (Reset zoom)
+                resetZoom()
+                return nil
             case 126: // Cmd + Up
                 scrollToTop()
                 return nil
@@ -978,6 +1064,290 @@ struct PDFKitRepresentable: NSViewRepresentable {
     }
 }
 
+// MARK: - Native QuickLook View
+
+final class QuickLookPreviewItem: NSObject, QLPreviewItem {
+    let previewItemURL: URL?
+    let previewItemTitle: String?
+
+    init(url: URL, title: String? = nil) {
+        self.previewItemURL = url
+        self.previewItemTitle = title ?? url.lastPathComponent
+        super.init()
+    }
+}
+
+struct QuickLookRepresentable: NSViewRepresentable {
+    let url: URL
+    let coordinator: QuickLookPreviewCoordinator
+
+    func makeNSView(context: Context) -> QLPreviewView {
+        let previewView: QLPreviewView
+        if let view = QLPreviewView(frame: .zero, style: .normal) {
+            previewView = view
+        } else {
+            previewView = QLPreviewView(frame: .zero) ?? QLPreviewView()
+        }
+        previewView.autoresizingMask = [.width, .height]
+        previewView.autostarts = true
+        previewView.previewItem = QuickLookPreviewItem(url: url)
+        coordinator.attach(previewView: previewView)
+        return previewView
+    }
+
+    func updateNSView(_ previewView: QLPreviewView, context: Context) {
+        coordinator.attach(previewView: previewView)
+        if let currentItem = previewView.previewItem as? QuickLookPreviewItem, currentItem.previewItemURL == url {
+            return
+        }
+        previewView.previewItem = QuickLookPreviewItem(url: url)
+        previewView.refreshPreviewItem()
+        coordinator.applyZoom()
+    }
+
+    static func dismantleNSView(_ previewView: QLPreviewView, coordinator: ()) {
+        previewView.close()
+    }
+}
+
+// MARK: - QuickLook Coordinator
+
+@MainActor
+final class QuickLookPreviewCoordinator: ObservableObject {
+    @Published var scaleFactor: CGFloat = 1.0
+    private weak var currentPreviewView: QLPreviewView?
+    private var keyMonitor: Any?
+
+    deinit {
+        if let monitor = keyMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+    }
+
+    func attach(previewView: QLPreviewView) {
+        self.currentPreviewView = previewView
+        applyZoom()
+        startKeyMonitoring()
+    }
+
+    func startKeyMonitoring() {
+        stopKeyMonitoring()
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            guard let self = self else { return event }
+            return self.handleKeyDown(event)
+        }
+    }
+
+    func stopKeyMonitoring() {
+        if let monitor = keyMonitor {
+            NSEvent.removeMonitor(monitor)
+            keyMonitor = nil
+        }
+    }
+
+    private func handleKeyDown(_ event: NSEvent) -> NSEvent? {
+        guard let window = NSApp.keyWindow, window.isKeyWindow else {
+            return event
+        }
+        if let responder = window.firstResponder,
+           responder is NSTextView || responder is NSTextField {
+            return event
+        }
+
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+        // Cmd shortcuts
+        if flags.contains(.command) && flags.intersection([.option, .control]).isEmpty {
+            switch event.keyCode {
+            case 24, 69: // Cmd + Plus / Equal / Keypad Plus
+                zoomIn()
+                return nil
+            case 27, 78: // Cmd + Minus / Keypad Minus
+                zoomOut()
+                return nil
+            case 29: // Cmd + 0 (Reset to 100%)
+                resetZoom()
+                return nil
+            default:
+                return event
+            }
+        }
+
+        return event
+    }
+
+    func zoomIn() {
+        scaleFactor = min(round((scaleFactor + 0.2) * 10) / 10, 3.0)
+        applyZoom()
+    }
+
+    func zoomOut() {
+        scaleFactor = max(round((scaleFactor - 0.2) * 10) / 10, 0.4)
+        applyZoom()
+    }
+
+    func resetZoom() {
+        scaleFactor = 1.0
+        applyZoom()
+    }
+
+    func applyZoom() {
+        guard let root = currentPreviewView else { return }
+        let scale = self.scaleFactor
+
+        if !applyZoomToSubviews(root: root, scale: scale) {
+            // QuickLook loads subviews asynchronously; retry shortly if not yet loaded
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                guard let self = self, let current = self.currentPreviewView, current === root else { return }
+                if !self.applyZoomToSubviews(root: current, scale: self.scaleFactor) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                        guard let self = self, let current = self.currentPreviewView, current === root else { return }
+                        _ = self.applyZoomToSubviews(root: current, scale: self.scaleFactor)
+                    }
+                }
+            }
+        }
+    }
+
+    @discardableResult
+    private func applyZoomToSubviews(root: NSView, scale: CGFloat) -> Bool {
+        // 1. WebKit-based QuickLook (Word doc/docx, Excel xls/xlsx/csv, RTF, HTML, etc.)
+        if let webView = findWKWebView(in: root) {
+            webView.allowsMagnification = true
+            webView.pageZoom = scale
+            return true
+        }
+
+        // 2. ScrollView-based QuickLook (Text files, source code, etc.)
+        if let scrollView = findScrollView(in: root) {
+            scrollView.allowsMagnification = true
+            let center = NSPoint(x: scrollView.bounds.midX, y: scrollView.bounds.midY)
+            scrollView.animator().setMagnification(scale, centeredAt: center)
+            return true
+        }
+
+        // 3. Layer-based QuickLook (PowerPoint ppt/pptx slides, Keynote, etc.)
+        if let container = findContentContainer(in: root), let child = container.subviews.first {
+            child.wantsLayer = true
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(0.18)
+            child.layer?.sublayerTransform = CATransform3DMakeScale(scale, scale, 1.0)
+            CATransaction.commit()
+            return true
+        }
+
+        return false
+    }
+
+    private func findWKWebView(in view: NSView) -> WKWebView? {
+        if let wv = view as? WKWebView { return wv }
+        for sub in view.subviews {
+            if let found = findWKWebView(in: sub) { return found }
+        }
+        return nil
+    }
+
+    private func findScrollView(in view: NSView) -> NSScrollView? {
+        if let sv = view as? NSScrollView { return sv }
+        for sub in view.subviews {
+            if let found = findScrollView(in: sub) { return found }
+        }
+        return nil
+    }
+
+    private func findContentContainer(in view: NSView) -> NSView? {
+        let className = NSStringFromClass(type(of: view))
+        if className.contains("QLDisplayBundleContainerView") {
+            return view
+        }
+        for sub in view.subviews {
+            if let found = findContentContainer(in: sub) { return found }
+        }
+        return nil
+    }
+}
+
+// MARK: - QuickLook Zoom Control Bar
+
+struct QuickLookZoomControlBar: View {
+    @ObservedObject var coordinator: QuickLookPreviewCoordinator
+
+    var body: some View {
+        HStack(spacing: 6) {
+            dividerLine
+
+            // Zoom Out (-)
+            Button {
+                coordinator.zoomOut()
+            } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("축소 (⌘ -)")
+
+            // Percentage Display
+            Text("\(Int(round(coordinator.scaleFactor * 100)))%")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .frame(minWidth: 40)
+                .padding(.vertical, 2)
+                .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 3))
+                .help("100%로 재설정 (⌘ 0)")
+                .onTapGesture {
+                    coordinator.resetZoom()
+                }
+
+            // Zoom In (+)
+            Button {
+                coordinator.zoomIn()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("확대 (⌘ +)")
+
+            dividerLine
+
+            // 100% Reset / Actual Size
+            Button {
+                coordinator.resetZoom()
+            } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("실제 크기 100% (⌘ 0)")
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(
+            Color(red: 0.17, green: 0.17, blue: 0.18).opacity(0.95),
+            in: RoundedRectangle(cornerRadius: 6)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.white.opacity(0.12), lineWidth: 0.8)
+        )
+    }
+
+    private var dividerLine: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.25))
+            .frame(width: 1, height: 13)
+    }
+}
+
 // MARK: - PDF Zoom & Fit Control Bar
 
 struct PDFZoomControlBar: View {
@@ -998,7 +1368,7 @@ struct PDFZoomControlBar: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("축소 (Zoom Out)")
+            .help("축소 (Zoom Out / ⌘ -)")
 
             // Percentage Display
             Text("\(Int(round(coordinator.scaleFactor * 100)))%")
@@ -1007,7 +1377,7 @@ struct PDFZoomControlBar: View {
                 .frame(minWidth: 40)
                 .padding(.vertical, 2)
                 .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 3))
-                .help("100%로 재설정")
+                .help("100%로 재설정 (⌘ 0)")
                 .onTapGesture {
                     coordinator.resetZoom()
                 }
@@ -1023,7 +1393,7 @@ struct PDFZoomControlBar: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("확대 (Zoom In)")
+            .help("확대 (Zoom In / ⌘ +)")
 
             dividerLine
 
