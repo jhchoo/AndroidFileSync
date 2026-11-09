@@ -1865,6 +1865,10 @@ struct ContentView: View {
     }
 
     private func handleQuickPreview() {
+        if filePreviewManager.showPreviewPanel {
+            filePreviewManager.dismissPreview()
+            return
+        }
         guard activeAppFilter == nil else { return }
         let isSec = (activePane == .secondary && isDualPaneEnabled)
         let sourceFiles = isSec ? secondaryFiles : files

@@ -46,6 +46,12 @@ struct FilePreviewPanel: View {
             withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
                 appeared = true
             }
+            if isPDFPreview {
+                pdfCoordinator.startKeyMonitoring()
+            }
+        }
+        .onDisappear {
+            pdfCoordinator.stopKeyMonitoring()
         }
         .onExitCommand { dismiss() }
     }
@@ -493,6 +499,7 @@ struct FilePreviewPanel: View {
     // MARK: - Dismiss
     
     private func dismiss() {
+        pdfCoordinator.stopKeyMonitoring()
         withAnimation(.spring(response: 0.2, dampingFraction: 0.9)) {
             appeared = false
         }
@@ -511,6 +518,73 @@ final class PDFPreviewCoordinator: ObservableObject {
     @Published var scaleFactor: CGFloat = 1.0
     @Published var document: PDFDocument?
     private weak var currentPDFView: PDFView?
+    private var keyMonitor: Any?
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        if let monitor = keyMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+    }
+
+    func startKeyMonitoring() {
+        stopKeyMonitoring()
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            guard let self = self else { return event }
+            return self.handleKeyDown(event)
+        }
+    }
+
+    func stopKeyMonitoring() {
+        if let monitor = keyMonitor {
+            NSEvent.removeMonitor(monitor)
+            keyMonitor = nil
+        }
+    }
+
+    private func handleKeyDown(_ event: NSEvent) -> NSEvent? {
+        guard let doc = currentPDFView?.document, doc.pageCount > 1 else {
+            return event
+        }
+        guard let window = NSApp.keyWindow, window.isKeyWindow else {
+            return event
+        }
+        if let responder = window.firstResponder,
+           responder is NSTextView || responder is NSTextField {
+            return event
+        }
+
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+        // Cmd + Up / Cmd + Down -> First / Last page
+        if flags.contains(.command) && flags.intersection([.option, .control]).isEmpty {
+            switch event.keyCode {
+            case 126: // Cmd + Up
+                goToPage(0)
+                return nil
+            case 125: // Cmd + Down
+                goToPage(doc.pageCount - 1)
+                return nil
+            default:
+                return event
+            }
+        }
+
+        guard flags.intersection([.command, .option, .control]).isEmpty else {
+            return event
+        }
+
+        switch event.keyCode {
+        case 125, 124, 121: // Down Arrow (125), Right Arrow (124), Page Down (121)
+            goToNextPage()
+            return nil
+        case 126, 123, 116: // Up Arrow (126), Left Arrow (123), Page Up (116)
+            goToPreviousPage()
+            return nil
+        default:
+            return event
+        }
+    }
 
     func attach(pdfView: PDFView) {
         self.currentPDFView = pdfView
@@ -533,6 +607,8 @@ final class PDFPreviewCoordinator: ObservableObject {
             name: .PDFViewScaleChanged,
             object: pdfView
         )
+
+        startKeyMonitoring()
     }
 
     func updatePages() {
@@ -572,8 +648,20 @@ final class PDFPreviewCoordinator: ObservableObject {
         guard let doc = currentPDFView?.document,
               index >= 0 && index < doc.pageCount,
               let targetPage = doc.page(at: index) else { return }
-        currentPDFView?.go(to: targetPage)
+        let pageBounds = targetPage.bounds(for: currentPDFView?.displayBox ?? .cropBox)
+        let destination = PDFDestination(page: targetPage, at: CGPoint(x: 0, y: pageBounds.height))
+        currentPDFView?.go(to: destination)
         self.currentPageIndex = index
+    }
+
+    func goToNextPage() {
+        guard currentPageIndex + 1 < pageCount else { return }
+        goToPage(currentPageIndex + 1)
+    }
+
+    func goToPreviousPage() {
+        guard currentPageIndex > 0 else { return }
+        goToPage(currentPageIndex - 1)
     }
 
     func zoomIn() {
