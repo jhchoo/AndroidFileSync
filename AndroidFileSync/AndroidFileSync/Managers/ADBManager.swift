@@ -2652,7 +2652,7 @@ class ADBManager {
         var buffer = ""
         let startTime = Date()
 
-        let (code, _, error, process) = await Shell.runWithProgressCancellable(
+        var (code, _, error, process) = await Shell.runWithProgressCancellable(
             adbPath,
             args: deviceArgs([command, source, dest]),
             progressCallback: { outputChunk in
@@ -2660,7 +2660,6 @@ class ADBManager {
                 if cancellationCheck() {
                     return
                 }
-                
 
                 buffer += outputChunk
                 if buffer.count > 300 {
@@ -2695,6 +2694,28 @@ class ADBManager {
             },
             cancellationCheck: cancellationCheck
         )
+
+        // If pull failed due to file not found, retry with complementary Unicode normalization (NFC <-> NFD)
+        if command == "pull" && code != 0 && (error.contains("failed to stat") || error.contains("No such file or directory")) {
+            let altSource = source == source.precomposedStringWithCanonicalMapping
+                ? source.decomposedStringWithCanonicalMapping
+                : source.precomposedStringWithCanonicalMapping
+            if altSource != source {
+                let (retryCode, _, retryErr, retryProc) = await Shell.runWithProgressCancellable(
+                    adbPath,
+                    args: deviceArgs([command, altSource, dest]),
+                    progressCallback: { _ in },
+                    cancellationCheck: cancellationCheck
+                )
+                if retryCode == 0 {
+                    code = 0
+                    error = ""
+                } else {
+                    error = retryErr
+                }
+                process = retryProc
+            }
+        }
         
         // If cancelled, terminate process if still running
         if cancellationCheck() && process.isRunning {

@@ -74,7 +74,7 @@ struct FileNameHelper {
     /// Cleans a filename returned from ADB commands:
     /// - Strips ANSI color codes and terminal escapes
     /// - Removes \r and non-printable control characters
-    /// - Normalizes Unicode to NFC (precomposed form, prevents Hangul jamo separation)
+    /// - Preserves exact Unicode byte sequence as stored on the remote device (preserves NFC or NFD)
     /// - Trims leading/trailing whitespace
     static func cleanFileName(_ name: String) -> String {
         let stripped = stripANSI(name)
@@ -82,16 +82,20 @@ struct FileNameHelper {
         let filtered = stripped.unicodeScalars.filter { scalar in
             !controlChars.contains(scalar)
         }
-        let result = String(filtered).trimmingCharacters(in: .whitespaces)
-        return result.precomposedStringWithCanonicalMapping
+        return String(filtered).trimmingCharacters(in: .whitespaces)
     }
 
     /// Ensures an Android remote file path is properly formatted:
     /// - Cleans ANSI escapes and control characters
     /// - Ensures a leading slash "/"
-    /// - Normalizes Unicode to NFC
+    /// - Preserves exact Unicode byte sequence as stored on the remote device (preserves NFC or NFD)
     static func cleanRemotePath(_ path: String) -> String {
-        let cleaned = cleanFileName(path)
+        let stripped = stripANSI(path)
+        let controlChars = CharacterSet.controlCharacters
+        let filtered = stripped.unicodeScalars.filter { scalar in
+            !controlChars.contains(scalar)
+        }
+        let cleaned = String(filtered).trimmingCharacters(in: .whitespaces)
         guard !cleaned.isEmpty else { return "/" }
         return cleaned.hasPrefix("/") ? cleaned : "/" + cleaned
     }

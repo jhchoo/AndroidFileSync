@@ -275,7 +275,7 @@ class FilePreviewManager: ObservableObject {
                 return
             }
             
-            let (code, _, error, _) = await Shell.runWithProgressCancellable(
+            var (code, _, error, _) = await Shell.runWithProgressCancellable(
                 adbPath,
                 args: ADBManager.deviceArgs(["pull", cleanDevicePath, localURL.path]),
                 progressCallback: { [weak self] text in
@@ -285,6 +285,31 @@ class FilePreviewManager: ObservableObject {
                     self?.cancellationRequested ?? false
                 }
             )
+
+            // If pulling failed due to file not found, retry with complementary Unicode normalization (NFC <-> NFD)
+            if code != 0 && (error.contains("failed to stat") || error.contains("No such file or directory")) {
+                let altPath = cleanDevicePath == cleanDevicePath.precomposedStringWithCanonicalMapping
+                    ? cleanDevicePath.decomposedStringWithCanonicalMapping
+                    : cleanDevicePath.precomposedStringWithCanonicalMapping
+                if altPath != cleanDevicePath {
+                    let (retryCode, _, retryErr, _) = await Shell.runWithProgressCancellable(
+                        adbPath,
+                        args: ADBManager.deviceArgs(["pull", altPath, localURL.path]),
+                        progressCallback: { [weak self] text in
+                            self?.parseAndUpdateProgress(text)
+                        },
+                        cancellationCheck: { [weak self] in
+                            self?.cancellationRequested ?? false
+                        }
+                    )
+                    if retryCode == 0 {
+                        code = 0
+                        error = ""
+                    } else {
+                        error = retryErr
+                    }
+                }
+            }
             
             isLoadingFullFile = false
             
@@ -331,7 +356,7 @@ class FilePreviewManager: ObservableObject {
         isLoadingFullFile = true
         fullFilePullProgress = "Loading PDF..."
 
-        let (code, _, error, _) = await Shell.runWithProgressCancellable(
+        var (code, _, error, _) = await Shell.runWithProgressCancellable(
             adbPath,
             args: ADBManager.deviceArgs(["pull", cleanDevicePath, localURL.path]),
             progressCallback: { [weak self] text in
@@ -341,6 +366,31 @@ class FilePreviewManager: ObservableObject {
                 self?.cancellationRequested ?? false
             }
         )
+
+        // If pulling failed due to file not found, retry with complementary Unicode normalization (NFC <-> NFD)
+        if code != 0 && (error.contains("failed to stat") || error.contains("No such file or directory")) {
+            let altPath = cleanDevicePath == cleanDevicePath.precomposedStringWithCanonicalMapping
+                ? cleanDevicePath.decomposedStringWithCanonicalMapping
+                : cleanDevicePath.precomposedStringWithCanonicalMapping
+            if altPath != cleanDevicePath {
+                let (retryCode, _, retryErr, _) = await Shell.runWithProgressCancellable(
+                    adbPath,
+                    args: ADBManager.deviceArgs(["pull", altPath, localURL.path]),
+                    progressCallback: { [weak self] text in
+                        self?.parseAndUpdateProgress(text)
+                    },
+                    cancellationCheck: { [weak self] in
+                        self?.cancellationRequested ?? false
+                    }
+                )
+                if retryCode == 0 {
+                    code = 0
+                    error = ""
+                } else {
+                    error = retryErr
+                }
+            }
+        }
 
         isLoadingFullFile = false
         isLoading = false
