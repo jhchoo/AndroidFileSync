@@ -45,6 +45,7 @@
 				Managers/OperationEngine.swift,
 				Managers/PairingMDNSProbe.swift,
 				Managers/PairingNetworkAccess.swift,
+				Managers/PDFDocumentLocationCache.swift,
 				Managers/QRPairingService.swift,
 				Managers/SidebarManager.swift,
 				Managers/SupportPromptManager.swift,

@@ -95,6 +95,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         installDeleteShortcutMonitor()
         installMouseNavigationMonitor()
+
+        // 7일 지난 PDF 열람 위치 캐시 정리
+        PDFDocumentLocationCache.shared.purgeExpiredEntries()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

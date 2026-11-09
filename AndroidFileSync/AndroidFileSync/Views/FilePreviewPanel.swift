@@ -346,7 +346,11 @@ struct FilePreviewPanel: View {
                     .frame(width: 1)
             }
 
-            PDFKitRepresentable(url: url, coordinator: pdfCoordinator)
+            PDFKitRepresentable(
+                url: url,
+                documentKey: previewManager.previewFile?.path ?? url.path,
+                coordinator: pdfCoordinator
+            )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(white: 0.18))
         }
@@ -499,6 +503,7 @@ struct FilePreviewPanel: View {
     // MARK: - Dismiss
     
     private func dismiss() {
+        pdfCoordinator.saveCurrentLocation()
         pdfCoordinator.stopKeyMonitoring()
         withAnimation(.spring(response: 0.2, dampingFraction: 0.9)) {
             appeared = false
@@ -516,9 +521,20 @@ final class PDFPreviewCoordinator: ObservableObject {
     @Published var pageCount: Int = 1
     @Published var currentPageIndex: Int = 0
     @Published var scaleFactor: CGFloat = 1.0
+    @Published var scrollStep: CGFloat {
+        didSet {
+            UserDefaults.standard.set(Double(scrollStep), forKey: "afs_pdf_scroll_step")
+        }
+    }
     @Published var document: PDFDocument?
+    var documentKey: String?
     private weak var currentPDFView: PDFView?
     private var keyMonitor: Any?
+
+    init() {
+        let savedStep = UserDefaults.standard.double(forKey: "afs_pdf_scroll_step")
+        self.scrollStep = savedStep > 0 ? CGFloat(savedStep) : 80
+    }
 
     deinit {
         NotificationCenter.default.removeObserver(self)
@@ -543,7 +559,7 @@ final class PDFPreviewCoordinator: ObservableObject {
     }
 
     private func handleKeyDown(_ event: NSEvent) -> NSEvent? {
-        guard let doc = currentPDFView?.document, doc.pageCount > 1 else {
+        guard let doc = currentPDFView?.document else {
             return event
         }
         guard let window = NSApp.keyWindow, window.isKeyWindow else {
@@ -560,7 +576,7 @@ final class PDFPreviewCoordinator: ObservableObject {
         if flags.contains(.command) && flags.intersection([.option, .control]).isEmpty {
             switch event.keyCode {
             case 126: // Cmd + Up
-                goToPage(0)
+                scrollToTop()
                 return nil
             case 125: // Cmd + Down
                 goToPage(doc.pageCount - 1)
@@ -575,10 +591,19 @@ final class PDFPreviewCoordinator: ObservableObject {
         }
 
         switch event.keyCode {
-        case 125, 124, 121: // Down Arrow (125), Right Arrow (124), Page Down (121)
+        // 방향키 상/하: 일반 컨텐츠 부드러운 스크롤 이동
+        case 125: // Down Arrow
+            scrollContent(deltaY: -scrollStep)
+            return nil
+        case 126: // Up Arrow
+            scrollContent(deltaY: scrollStep)
+            return nil
+
+        // Page Up / Down 및 좌우 방향키: 페이지 단위 이동
+        case 121, 124: // Page Down (121), Right Arrow (124)
             goToNextPage()
             return nil
-        case 126, 123, 116: // Up Arrow (126), Left Arrow (123), Page Up (116)
+        case 116, 123: // Page Up (116), Left Arrow (123)
             goToPreviousPage()
             return nil
         default:
@@ -586,9 +611,65 @@ final class PDFPreviewCoordinator: ObservableObject {
         }
     }
 
-    func attach(pdfView: PDFView) {
+    /// PDF 내부 NSScrollView를 찾아 지정된 deltaY(pt)만큼 스크롤
+    func scrollContent(deltaY: CGFloat) {
+        guard let pdfView = currentPDFView else { return }
+        guard let scrollView = findScrollView(in: pdfView) else { return }
+        let clipView = scrollView.contentView
+        let currentOrigin = clipView.bounds.origin
+
+        var newOrigin = currentOrigin
+        // macOS isFlipped 좌표계: 위로 스크롤(deltaY > 0) -> y 감소, 아래로 스크롤(deltaY < 0) -> y 증가
+        if clipView.isFlipped {
+            newOrigin.y -= deltaY
+        } else {
+            newOrigin.y += deltaY
+        }
+
+        let docView = clipView.documentView
+        let maxY = (docView?.bounds.height ?? clipView.bounds.height) - clipView.bounds.height
+        newOrigin.y = max(0, min(max(maxY, 0), newOrigin.y))
+
+        clipView.scroll(to: newOrigin)
+        scrollView.reflectScrolledClipView(clipView)
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.updateCurrentPageFromViewport()
+            self.saveCurrentLocation()
+        }
+    }
+
+    /// 문서 맨 위로 즉시 이동
+    func scrollToTop() {
+        goToPage(0)
+        guard let pdfView = currentPDFView else { return }
+        if let scrollView = findScrollView(in: pdfView) {
+            let clipView = scrollView.contentView
+            var origin = clipView.bounds.origin
+            origin.y = 0
+            clipView.scroll(to: origin)
+            scrollView.reflectScrolledClipView(clipView)
+        }
+        saveCurrentLocation()
+    }
+
+    private func findScrollView(in view: NSView) -> NSScrollView? {
+        if let sv = view as? NSScrollView {
+            return sv
+        }
+        for sub in view.subviews {
+            if let found = findScrollView(in: sub) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    func attach(pdfView: PDFView, documentKey: String?) {
         self.currentPDFView = pdfView
         self.document = pdfView.document
+        self.documentKey = documentKey
         self.scaleFactor = pdfView.scaleFactor
         updatePages()
 
@@ -608,7 +689,136 @@ final class PDFPreviewCoordinator: ObservableObject {
             object: pdfView
         )
 
+        // 스크롤 변경(좌우 / 상하 이동) 감지 등록
+        NotificationCenter.default.removeObserver(self, name: NSView.boundsDidChangeNotification, object: nil)
+        if let clipView = findScrollView(in: pdfView)?.contentView {
+            clipView.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(handleBoundsChanged(_:)),
+                name: NSView.boundsDidChangeNotification,
+                object: clipView
+            )
+        }
+
         startKeyMonitoring()
+        restoreSavedLocationIfAvailable()
+    }
+
+    @objc private func handleBoundsChanged(_ note: Notification) {
+        updateCurrentPageFromViewport()
+        saveCurrentLocation()
+    }
+
+    /// 현재 뷰포트에 가장 많이 보이거나 중심에 위치한 페이지를 감지하여 currentPageIndex 동기화
+    func updateCurrentPageFromViewport() {
+        guard let pdfView = currentPDFView,
+              let doc = pdfView.document,
+              doc.pageCount > 0 else { return }
+
+        // 1. PDFView의 visiblePages 중 뷰포트 내 가장 넓은 면적을 차지하는 페이지 계산
+        let visiblePages = pdfView.visiblePages
+        if !visiblePages.isEmpty {
+            let viewBounds = pdfView.bounds
+            var bestPage: PDFPage? = nil
+            var maxVisibleArea: CGFloat = 0
+
+            for page in visiblePages {
+                let rectInView = pdfView.convert(page.bounds(for: pdfView.displayBox), from: page)
+                let intersection = rectInView.intersection(viewBounds)
+                if !intersection.isNull && !intersection.isEmpty {
+                    let area = intersection.width * intersection.height
+                    if area > maxVisibleArea {
+                        maxVisibleArea = area
+                        bestPage = page
+                    }
+                }
+            }
+
+            if let chosen = bestPage {
+                let idx = doc.index(for: chosen)
+                if idx >= 0 && idx < doc.pageCount && self.currentPageIndex != idx {
+                    self.currentPageIndex = idx
+                }
+                return
+            }
+        }
+
+        // 2. Fallback: 뷰포트 중앙(center)에 위치한 페이지 찾기
+        let centerPoint = CGPoint(x: pdfView.bounds.midX, y: pdfView.bounds.midY)
+        if let centerPage = pdfView.page(for: centerPoint, nearest: true) {
+            let idx = doc.index(for: centerPage)
+            if idx >= 0 && idx < doc.pageCount && self.currentPageIndex != idx {
+                self.currentPageIndex = idx
+                return
+            }
+        }
+
+        // 3. Fallback: pdfView.currentPage
+        if let current = pdfView.currentPage {
+            let idx = doc.index(for: current)
+            if idx >= 0 && idx < doc.pageCount && self.currentPageIndex != idx {
+                self.currentPageIndex = idx
+            }
+        }
+    }
+
+    /// 이전에 저장된 위치(페이지, 상하/좌우 스크롤, 배율) 복원
+    func restoreSavedLocationIfAvailable() {
+        guard let key = documentKey,
+              let location = PDFDocumentLocationCache.shared.location(for: key),
+              let pdfView = currentPDFView,
+              let doc = pdfView.document,
+              doc.pageCount > 0 else { return }
+
+        let targetIndex = min(max(0, location.pageIndex), doc.pageCount - 1)
+        if let page = doc.page(at: targetIndex) {
+            pdfView.go(to: page)
+            self.currentPageIndex = targetIndex
+        }
+
+        if let savedScale = location.scaleFactor, savedScale > 0.1 {
+            pdfView.autoScales = false
+            pdfView.scaleFactor = CGFloat(savedScale)
+            self.scaleFactor = CGFloat(savedScale)
+        }
+
+        if let scrollView = findScrollView(in: pdfView) {
+            DispatchQueue.main.async {
+                let clipView = scrollView.contentView
+                var origin = clipView.bounds.origin
+                if let savedOffsetX = location.scrollOffsetX {
+                    origin.x = CGFloat(savedOffsetX)
+                }
+                if let savedOffsetY = location.scrollOffsetY {
+                    origin.y = CGFloat(savedOffsetY)
+                }
+                clipView.scroll(to: origin)
+                scrollView.reflectScrolledClipView(clipView)
+            }
+        }
+    }
+
+    /// 현재 위치를 7일 유효 캐시에 저장 (상하 및 좌우 스크롤 포함)
+    func saveCurrentLocation() {
+        guard let key = documentKey,
+              let pdfView = currentPDFView else { return }
+
+        var currentScrollX: Double? = nil
+        var currentScrollY: Double? = nil
+        if let scrollView = findScrollView(in: pdfView) {
+            let bounds = scrollView.contentView.bounds
+            currentScrollX = Double(bounds.origin.x)
+            currentScrollY = Double(bounds.origin.y)
+        }
+
+        PDFDocumentLocationCache.shared.saveLocation(
+            for: key,
+            pageIndex: currentPageIndex,
+            scrollOffsetX: currentScrollX,
+            scrollOffsetY: currentScrollY,
+            scaleFactor: Double(scaleFactor)
+        )
     }
 
     func updatePages() {
@@ -631,6 +841,7 @@ final class PDFPreviewCoordinator: ObservableObject {
         let idx = doc.index(for: current)
         if idx >= 0 && idx < doc.pageCount && self.currentPageIndex != idx {
             self.currentPageIndex = idx
+            saveCurrentLocation()
         }
         if self.pageCount != doc.pageCount {
             self.pageCount = max(doc.pageCount, 1)
@@ -641,6 +852,7 @@ final class PDFPreviewCoordinator: ObservableObject {
         guard let pdfView = currentPDFView else { return }
         if abs(self.scaleFactor - pdfView.scaleFactor) > 0.001 {
             self.scaleFactor = pdfView.scaleFactor
+            saveCurrentLocation()
         }
     }
 
@@ -652,6 +864,7 @@ final class PDFPreviewCoordinator: ObservableObject {
         let destination = PDFDestination(page: targetPage, at: CGPoint(x: 0, y: pageBounds.height))
         currentPDFView?.go(to: destination)
         self.currentPageIndex = index
+        saveCurrentLocation()
     }
 
     func goToNextPage() {
@@ -716,6 +929,7 @@ final class PDFPreviewCoordinator: ObservableObject {
 
 struct PDFKitRepresentable: NSViewRepresentable {
     let url: URL
+    let documentKey: String
     let coordinator: PDFPreviewCoordinator
 
     func makeNSView(context: Context) -> PDFView {
@@ -728,11 +942,13 @@ struct PDFKitRepresentable: NSViewRepresentable {
         pdfView.enableDataDetectors = false // Prevents E5 TextRecognition errors & stall
 
         loadDocument(into: pdfView)
-        coordinator.attach(pdfView: pdfView)
+        coordinator.attach(pdfView: pdfView, documentKey: documentKey)
 
         DispatchQueue.main.async {
             pdfView.layoutDocumentView()
-            pdfView.autoScales = true
+            if PDFDocumentLocationCache.shared.location(for: documentKey) == nil {
+                pdfView.autoScales = true
+            }
             coordinator.updatePages()
         }
 
@@ -742,10 +958,12 @@ struct PDFKitRepresentable: NSViewRepresentable {
     func updateNSView(_ pdfView: PDFView, context: Context) {
         if pdfView.document?.documentURL != url {
             loadDocument(into: pdfView)
-            coordinator.attach(pdfView: pdfView)
+            coordinator.attach(pdfView: pdfView, documentKey: documentKey)
             DispatchQueue.main.async {
                 pdfView.layoutDocumentView()
-                pdfView.autoScales = true
+                if PDFDocumentLocationCache.shared.location(for: documentKey) == nil {
+                    pdfView.autoScales = true
+                }
                 coordinator.updatePages()
             }
         }
@@ -830,6 +1048,43 @@ struct PDFZoomControlBar: View {
             }
             .buttonStyle(.plain)
             .help("세로 맞춤")
+
+            dividerLine
+
+            // Scroll to Top (문서 맨 위로 이동)
+            Button {
+                coordinator.scrollToTop()
+            } label: {
+                Image(systemName: "arrow.up.to.line")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .frame(width: 22, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("문서 맨 위로 이동 (⌘ + ↑)")
+
+            // Scroll Step Selector (방향키 스크롤 이동량 조절)
+            Menu {
+                Button("미세 이동 (40 pt)") { coordinator.scrollStep = 40 }
+                Button("기본 이동 (80 pt)") { coordinator.scrollStep = 80 }
+                Button("빠른 이동 (140 pt)") { coordinator.scrollStep = 140 }
+                Button("반 페이지 (250 pt)") { coordinator.scrollStep = 250 }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "arrow.up.and.down")
+                        .font(.system(size: 9, weight: .bold))
+                    Text("\(Int(coordinator.scrollStep))px")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                }
+                .foregroundStyle(.white.opacity(0.85))
+                .padding(.horizontal, 4)
+                .frame(height: 20)
+                .background(Color.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 3))
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("방향키 스크롤 이동 거리 설정 (선택 저장됨)")
         }
         .padding(.horizontal, 7)
         .padding(.vertical, 3)
@@ -941,7 +1196,7 @@ struct PDFThumbnailSidebarView: View {
             // Thumbnails List
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: true) {
-                    LazyVStack(spacing: 20) {
+                    VStack(spacing: 20) {
                         if let doc = coordinator.document {
                             ForEach(0..<coordinator.pageCount, id: \.self) { index in
                                 PDFThumbnailItemView(
