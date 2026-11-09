@@ -769,6 +769,10 @@ struct FileBrowserView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .contextMenu {
+            emptyAreaContextMenu
+        }
     }
     
     private static let dateFormatter: DateFormatter = {
@@ -813,6 +817,8 @@ struct FileBrowserView: View {
                         }
                     }
                     .padding(16)
+                    .frame(maxWidth: .infinity, minHeight: geometry.size.height, alignment: .topLeading)
+                    .contentShape(Rectangle())
                 }
                 .scrollContentBackground(.hidden)
                 .coordinateSpace(name: "fileBrowserGrid")
@@ -821,6 +827,9 @@ struct FileBrowserView: View {
                     keyboardNavigation(isGrid: true, columns: columnCount, frames: frames, selectedIDs: selection, scrollTo: { proxy.scrollTo($0) })
                 )
                 .overlay(alignment: .topLeading) { marqueeOverlay }
+                .contextMenu {
+                    emptyAreaContextMenu
+                }
             }
         }
     }
@@ -898,65 +907,79 @@ struct FileBrowserView: View {
         // Use contextMenu with primaryAction for double-click - this is the macOS-native approach
                 // that works with selection (macOS 13+)
                 .contextMenu(forSelectionType: String.self, menu: { selectedIds in
-                    // Context menu for selected items
-                    let selectedItems = files.filter { selectedIds.contains($0.id) }
-                    let isSingleSelection = selectedIds.count <= 1
-                    let hasOnlyFiles = !selectedItems.isEmpty && selectedItems.allSatisfy { !$0.isDirectory }
-                    
-                    if let firstItem = selectedItems.first {
-                        // Preview option (for single previewable files)
-                        if isSingleSelection && !firstItem.isDirectory && FilePreviewManager.isPreviewable(firstItem) {
-                            Button {
-                                onPreview?(firstItem)
-                            } label: {
-                                Label("Preview", systemImage: "eye")
-                            }
-                            Divider()
-                        }
+                    if selectedIds.isEmpty {
+                        emptyAreaContextMenu
+                    } else {
+                        // Context menu for selected items
+                        let selectedItems = files.filter { selectedIds.contains($0.id) }
+                        let isSingleSelection = selectedIds.count <= 1
+                        let hasOnlyFiles = !selectedItems.isEmpty && selectedItems.allSatisfy { !$0.isDirectory }
                         
-                        // Download
-                        if !firstItem.isDirectory || !isSingleSelection {
-                            Button(isSingleSelection ? "Download to Mac" : "Download Selected to Mac") {
-                                if isSingleSelection, let file = selectedItems.first, !file.isDirectory {
-                                    onDownload(file)
-                                } else {
-                                    onBatchDownload?()
+                        if let firstItem = selectedItems.first {
+                            // Preview option (for single previewable files)
+                            if isSingleSelection && !firstItem.isDirectory && FilePreviewManager.isPreviewable(firstItem) {
+                                Button {
+                                    onPreview?(firstItem)
+                                } label: {
+                                    Label("Preview", systemImage: "eye")
                                 }
+                                Divider()
                             }
-                            Divider()
-                        }
-                        
-                        // Folder download option
-                        if isSingleSelection && firstItem.isDirectory {
-                            Button {
-                                onDownloadFolder?(firstItem)
-                            } label: {
-                                Label("Download Folder to Mac", systemImage: "folder.badge.gearshape")
+                            
+                            // Download
+                            if !firstItem.isDirectory || !isSingleSelection {
+                                Button(isSingleSelection ? "Download to Mac" : "Download Selected to Mac") {
+                                    if isSingleSelection, let file = selectedItems.first, !file.isDirectory {
+                                        onDownload(file)
+                                    } else {
+                                        onBatchDownload?()
+                                    }
+                                }
+                                Divider()
                             }
+                            
+                            // Folder download option
+                            if isSingleSelection && firstItem.isDirectory {
+                                Button {
+                                    onDownloadFolder?(firstItem)
+                                } label: {
+                                    Label("Download Folder to Mac", systemImage: "folder.badge.gearshape")
+                                }
 
-                            // ── Add to Sidebar ──────────────────────────────
-                            Button {
-                                onAddToSidebar?(firstItem)
-                            } label: {
-                                Label("Add to Sidebar", systemImage: "sidebar.left")
-                            }
+                                // ── Add to Sidebar ──────────────────────────────
+                                Button {
+                                    onAddToSidebar?(firstItem)
+                                } label: {
+                                    Label("Add to Sidebar", systemImage: "sidebar.left")
+                                }
 
+                                Divider()
+                            }
+                            
+                            // Copy
+                            Button(isSingleSelection ? "Copy" : "Copy \(selectedIds.count) items") {
+                                let items = isSingleSelection ? [firstItem] : selectedItems
+                                onCopy?(items)
+                            }
+                            
+                            // Cut
+                            Button(isSingleSelection ? "Cut" : "Cut \(selectedIds.count) items") {
+                                let items = isSingleSelection ? [firstItem] : selectedItems
+                                onCut?(items)
+                            }
+                            
+                            // Paste Here
+                            if clipboardCount > 0 {
+                                Button {
+                                    onPaste?()
+                                } label: {
+                                    Label(pasteMenuTitle, systemImage: clipboardOperation == .cut ? "scissors" : "doc.on.clipboard")
+                                }
+                                .keyboardShortcut("v", modifiers: .command)
+                                .disabled(onPaste == nil)
+                            }
+                            
                             Divider()
-                        }
-                        
-                        // Copy
-                        Button(isSingleSelection ? "Copy" : "Copy \(selectedIds.count) items") {
-                            let items = isSingleSelection ? [firstItem] : selectedItems
-                            onCopy?(items)
-                        }
-                        
-                        // Cut
-                        Button(isSingleSelection ? "Cut" : "Cut \(selectedIds.count) items") {
-                            let items = isSingleSelection ? [firstItem] : selectedItems
-                            onCut?(items)
-                        }
-                        
-                        Divider()
                         
                         // Rename - only for single selection
                         if isSingleSelection {
@@ -993,6 +1016,7 @@ struct FileBrowserView: View {
                                 showBatchDeleteConfirmation = true
                             }
                         }
+                    }
                     }
                 }, primaryAction: { selectedIds in
                     // Double-click action
@@ -1067,6 +1091,20 @@ struct FileBrowserView: View {
             onCut?(items)
         }
         
+        // Paste Here
+        if clipboardCount > 0 {
+            Button {
+                onPaste?()
+            } label: {
+                Label(
+                    pasteMenuTitle,
+                    systemImage: clipboardOperation == .cut ? "scissors" : "doc.on.clipboard"
+                )
+            }
+            .keyboardShortcut("v", modifiers: .command)
+            .disabled(onPaste == nil)
+        }
+        
         Divider()
         
         // Rename - only for single selection
@@ -1105,6 +1143,30 @@ struct FileBrowserView: View {
             }
         }
         .disabled(onDelete == nil)
+    }
+
+    // MARK: - Context Menu Helpers
+
+    @ViewBuilder
+    private var emptyAreaContextMenu: some View {
+        Button {
+            onPaste?()
+        } label: {
+            Label(
+                pasteMenuTitle,
+                systemImage: clipboardOperation == .cut ? "scissors" : "doc.on.clipboard"
+            )
+        }
+        .keyboardShortcut("v", modifiers: .command)
+        .disabled(clipboardCount == 0 || onPaste == nil)
+    }
+
+    private var pasteMenuTitle: String {
+        if clipboardCount > 1 {
+            return "Paste Here (\(clipboardCount) items)"
+        } else {
+            return "Paste Here"
+        }
     }
     
     // MARK: - Column Content Helpers

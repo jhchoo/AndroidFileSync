@@ -1010,8 +1010,13 @@ struct ContentView: View {
                             clipboardOperation: fileActionManager.clipboardOperation,
                             onPaste: {
                                 Task {
-                                    do { try await fileActionManager.paste(to: currentPath) } catch {}
+                                    do {
+                                        try await fileActionManager.paste(to: currentPath)
+                                    } catch {
+                                        print("❌ Paste failed: \(error.localizedDescription)")
+                                    }
                                     await loadFiles()
+                                    await deviceManager.fetchStorageInfo()
                                 }
                             },
                             onClearClipboard: { fileActionManager.clearClipboard() },

@@ -350,7 +350,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 3;
-				DEVELOPMENT_TEAM = 34TS8NHVHD;
+				DEVELOPMENT_TEAM = W33H96C7PY;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -368,8 +368,8 @@
 					/opt/homebrew/Cellar/libmtp/1.1.22/lib,
 					/opt/homebrew/Cellar/libusb/1.0.29/lib,
 				);
-				MARKETING_VERSION = "2.3.3";
-				PRODUCT_BUNDLE_IDENTIFIER = com.santosh.AndroidFileSync1;
+				MARKETING_VERSION = 2.3.3;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jhchoo.AndroidFileSync;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
@@ -400,7 +400,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 3;
-				DEVELOPMENT_TEAM = 34TS8NHVHD;
+				DEVELOPMENT_TEAM = W33H96C7PY;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -418,8 +418,8 @@
 					/opt/homebrew/Cellar/libmtp/1.1.22/lib,
 					/opt/homebrew/Cellar/libusb/1.0.29/lib,
 				);
-				MARKETING_VERSION = "2.3.3";
-				PRODUCT_BUNDLE_IDENTIFIER = com.santosh.AndroidFileSync1;
+				MARKETING_VERSION = 2.3.3;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jhchoo.AndroidFileSync;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
