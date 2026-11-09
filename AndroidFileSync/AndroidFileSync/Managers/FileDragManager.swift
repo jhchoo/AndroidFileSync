@@ -34,7 +34,8 @@ final class UnifiedFilePromiseProvider: NSFilePromiseProvider {
             return UTType.folder.identifier
         }
         let ext = (file.name as NSString).pathExtension
-        if !ext.isEmpty, let utType = UTType(filenameExtension: ext) {
+        if !ext.isEmpty, let utType = UTType(filenameExtension: ext),
+           utType.conforms(to: .data) || utType.conforms(to: .directory) || utType.conforms(to: .item) {
             return utType.identifier
         }
         return UTType.data.identifier
@@ -69,7 +70,7 @@ final class UnifiedFilePromiseProvider: NSFilePromiseProvider {
             return file.path
         }
         if type == .string {
-            return allFiles.map(\.path).joined(separator: "\n")
+            return file.path
         }
         return super.pasteboardPropertyList(forType: type)
     }
@@ -110,20 +111,19 @@ final class FileDragManager: NSObject, ObservableObject, NSDraggingSource {
             height: image.size.height
         )
 
-        let dragItems: [NSDraggingItem] = files.enumerated().map { index, file in
+        let dragItems: [NSDraggingItem] = files.map { file in
             let provider = UnifiedFilePromiseProvider(
                 file: file,
                 allFiles: files,
                 delegate: self
             )
             let item = NSDraggingItem(pasteboardWriter: provider)
-            let itemFrame = index == 0 ? frame : NSRect(origin: frame.origin, size: .zero)
-            let itemContents: Any? = index == 0 ? image : NSImage()
-            item.setDraggingFrame(itemFrame, contents: itemContents)
+            item.setDraggingFrame(frame, contents: image)
             return item
         }
 
-        view.beginDraggingSession(with: dragItems, event: event, source: self)
+        let session = view.beginDraggingSession(with: dragItems, event: event, source: self)
+        session.draggingFormation = .none
     }
 
     func clearDrag() {
