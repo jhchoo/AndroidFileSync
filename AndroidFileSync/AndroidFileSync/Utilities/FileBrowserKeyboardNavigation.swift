@@ -14,6 +14,7 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
     var onSpace: (() -> Void)? = nil
     var onDrag: ((Set<Int>, Int?, Int?) -> Void)? = nil
     var onMarqueeChange: ((CGRect?) -> Void)? = nil
+    var onItemDrag: ((Set<Int>, NSEvent, NSView) -> Void)? = nil
 
     func makeNSView(context: Context) -> KeyboardView { KeyboardView() }
 
@@ -33,6 +34,7 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
         view.onSpace = onSpace
         view.onDrag = onDrag
         view.onMarqueeChange = onMarqueeChange
+        view.onItemDrag = onItemDrag
     }
 
     static func dismantleNSView(_ view: KeyboardView, coordinator: ()) {
@@ -51,12 +53,15 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
         var onSpace: (() -> Void)?
         var onDrag: ((Set<Int>, Int?, Int?) -> Void)?
         var onMarqueeChange: ((CGRect?) -> Void)?
+        var onItemDrag: ((Set<Int>, NSEvent, NSView) -> Void)?
         private var monitor: Any?
         private var dragOrigin: CGPoint?
         private var dragAnchor: Int?
         private var dragBaseSelection: Set<Int> = []
         private var didDrag = false
         private var pendingOpenIndex: Int?
+        private var pendingSingleClickIndex: Int?
+        private var lastMouseDownEvent: NSEvent?
 
         override var acceptsFirstResponder: Bool { true }
         override var isFlipped: Bool { true }
@@ -79,6 +84,8 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
             monitor = nil
             dragOrigin = nil
             pendingOpenIndex = nil
+            pendingSingleClickIndex = nil
+            lastMouseDownEvent = nil
         }
 
         private func tableView() -> NSTableView? {
@@ -127,15 +134,37 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
                 dragAnchor = index
                 dragBaseSelection = flags.intersection([.shift, .command]).isEmpty ? [] : selectedIndexes
                 didDrag = false
+                lastMouseDownEvent = event
                 pendingOpenIndex = event.clickCount == 2 && flags.intersection([.shift, .command, .option, .control]).isEmpty
                     ? index : nil
-                onClick?(index, flags)
+                
+                let isAlreadySelected = index != nil && selectedIndexes.contains(index!)
+                let hasModifiers = !flags.intersection([.shift, .command]).isEmpty
+                if isAlreadySelected && !hasModifiers {
+                    pendingSingleClickIndex = index
+                } else {
+                    pendingSingleClickIndex = nil
+                    onClick?(index, flags)
+                }
                 return nil
             }
             if event.type == .leftMouseDragged, let origin = dragOrigin {
                 guard didDrag || hypot(point.x - origin.x, point.y - origin.y) > 3 else { return nil }
                 didDrag = true
                 pendingOpenIndex = nil
+                pendingSingleClickIndex = nil
+
+                // If user dragged starting on an item -> initiate file drag session
+                if let anchor = dragAnchor {
+                    let dragged = selectedIndexes.contains(anchor) ? selectedIndexes : [anchor]
+                    let dragEvt = lastMouseDownEvent ?? event
+                    dragOrigin = nil
+                    dragAnchor = nil
+                    onItemDrag?(dragged, dragEvt, self)
+                    return nil
+                }
+
+                // If user dragged on empty background -> marquee selection
                 let rectangle = CGRect(x: min(origin.x, point.x), y: min(origin.y, point.y),
                                        width: max(abs(point.x - origin.x), 1), height: max(abs(point.y - origin.y), 1))
                 let itemFrames = frames()
@@ -154,6 +183,12 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
                 return nil
             }
             if event.type == .leftMouseUp, let origin = dragOrigin {
+                if let singleClickIndex = pendingSingleClickIndex, !didDrag {
+                    onClick?(singleClickIndex, flags)
+                }
+                pendingSingleClickIndex = nil
+                lastMouseDownEvent = nil
+
                 // A quick selection click followed by a drag can have clickCount
                 // 2. Wait for release so movement can cancel opening the item.
                 let openIndex = pendingOpenIndex.flatMap { index in
@@ -161,6 +196,7 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
                         && frames()[index]?.contains(point) == true ? index : nil
                 }
                 dragOrigin = nil
+                dragAnchor = nil
                 pendingOpenIndex = nil
                 onMarqueeChange?(nil)
                 window.makeFirstResponder(self)

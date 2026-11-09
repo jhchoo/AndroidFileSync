@@ -1006,7 +1006,7 @@ struct ContentView: View {
                             onNavigate: navigateTo,
                             onGoBack: navigateBack,
                             onDownload: handleDownload,
-                            onUpload: handleUpload,
+                            onUpload: { urls in handleUpload(urls: urls) },
                             onDelete: handleDelete,
                             onRename: handleRename,
                             onPreview: { file in filePreviewManager.previewFile(file) },
@@ -1056,6 +1056,8 @@ struct ContentView: View {
                             },
                             onNewFolder: handleCreateNewFolder,
                             onClearClipboard: { fileActionManager.clearClipboard() },
+                            onMoveFiles: { files, dest in handleMoveFiles(files: files, destination: dest) },
+                            onUploadToFolder: { urls, dest in handleUpload(urls: urls, destinationPath: dest) },
                             activeDeletions: fileActionManager.activeDeletions,
                             onCancelDeletion: { id in fileActionManager.cancelDeletion(id: id) },
                             onCancelAllDeletions: { fileActionManager.cancelAllDeletions() },
@@ -1932,9 +1934,22 @@ struct ContentView: View {
         }
     }
     
-    private func handleUpload(urls: [URL]) {
+    private func handleMoveFiles(files: [UnifiedFile], destination: String) {
+        Task {
+            do {
+                try await fileActionManager.moveFiles(files, to: destination)
+            } catch {
+                AppLogger.log("❌ [handleMoveFiles] Move failed: \(error.localizedDescription)", level: .error)
+                presentFileOperationError(error)
+            }
+            await loadFiles()
+            await deviceManager.fetchStorageInfo()
+        }
+    }
+
+    private func handleUpload(urls: [URL], destinationPath: String? = nil) {
         let manager = self.uploadManager
-        let path = self.currentPath
+        let path = destinationPath ?? self.currentPath
 
         // Show immediate feedback so the user doesn't stare at a blank screen
         Task { @MainActor in

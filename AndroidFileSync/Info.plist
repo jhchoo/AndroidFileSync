@@ -9,5 +9,18 @@
 		<string>_adb-tls-pairing._tcp</string>
 		<string>_adb-tls-connect._tcp</string>
 	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.androidfilesync.internalfile</string>
+			<key>UTTypeDescription</key>
+			<string>Android File Sync Internal File</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

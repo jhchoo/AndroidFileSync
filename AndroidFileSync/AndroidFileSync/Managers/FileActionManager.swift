@@ -981,6 +981,144 @@ class FileActionManager: ObservableObject {
             }
         }
     }
+
+    // MARK: - Drag and Drop Move Support
+
+    /// Moves files to a destination directory on the Android device (used by Drag & Drop).
+    func moveFiles(_ files: [UnifiedFile], to destinationPath: String) async throws {
+        guard !files.isEmpty else { return }
+
+        let normalizedDest = destinationPath.hasSuffix("/") && destinationPath.count > 1
+            ? String(destinationPath.dropLast())
+            : destinationPath
+
+        let validFiles = files.filter { file in
+            let currentParent = (file.path as NSString).deletingLastPathComponent
+            if currentParent == normalizedDest { return false }
+            if file.isDirectory && (normalizedDest == file.path || normalizedDest.hasPrefix(file.path + "/")) {
+                return false
+            }
+            return true
+        }
+
+        guard !validFiles.isEmpty else { return }
+
+        await MainActor.run {
+            isPerformingAction = true
+            currentAction      = "Moving \(validFiles.count) item\(validFiles.count > 1 ? "s" : "")…"
+            lastError          = nil
+        }
+
+        // Ensure destination folder exists
+        let mkdirResult = await Shell.runAsync(
+            ADBManager.getADBPath(),
+            args: ADBManager.deviceArgs(["shell", "mkdir -p '\(normalizedDest.replacingOccurrences(of: "'", with: "'\\''"))'"])
+        )
+        if mkdirResult.0 != 0 {
+            await MainActor.run {
+                isPerformingAction = false
+                currentAction      = ""
+                lastError          = "Cannot access destination: \(normalizedDest)\n\(mkdirResult.2)"
+            }
+            return
+        }
+
+        var readyItems:    [(file: UnifiedFile, dest: String)] = []
+        var conflictItems: [(file: UnifiedFile, dest: String)] = []
+
+        for file in validFiles {
+            let baseDest = normalizedDest.hasSuffix("/")
+                ? "\(normalizedDest)\(file.name)"
+                : "\(normalizedDest)/\(file.name)"
+
+            let escBase = baseDest.replacingOccurrences(of: "'", with: "'\\''")
+            let (_, testOut, _) = await Shell.runAsync(
+                ADBManager.getADBPath(),
+                args: ADBManager.deviceArgs(["shell", "[ -e '\(escBase)' ] && echo 1 || echo 0"])
+            )
+            if testOut.trimmingCharacters(in: .whitespacesAndNewlines) == "1" {
+                conflictItems.append((file, baseDest))
+            } else {
+                readyItems.append((file, baseDest))
+            }
+        }
+
+        await MainActor.run { isPerformingAction = false }
+
+        if conflictItems.isEmpty {
+            try await executeMove(items: readyItems)
+        } else {
+            pendingPasteItems      = readyItems
+            pendingDestinationPath = normalizedDest
+            pendingOperation       = .cut
+            await MainActor.run {
+                pasteConflicts = conflictItems.map { PasteConflict(file: $0.file, destinationPath: $0.dest) }
+            }
+        }
+    }
+
+    /// Executes batch move for drag-and-drop operations without altering clipboard state.
+    private func executeMove(items: [(file: UnifiedFile, dest: String)]) async throws {
+        guard !items.isEmpty else { return }
+
+        let n = items.count
+        await MainActor.run {
+            isPerformingAction = true
+            currentAction      = "Moving \(n) item\(n > 1 ? "s" : "")…"
+        }
+
+        var successCount = 0
+        var failedItems: [(name: String, error: String)] = []
+        var successPaths: [String] = []
+
+        var moveCommands: [String] = []
+        for (file, destFile) in items {
+            let escapedSrc = file.path.replacingOccurrences(of: "'", with: "'\\''")
+            let escapedDst = destFile.replacingOccurrences(of: "'", with: "'\\''")
+            moveCommands.append("mv '\(escapedSrc)' '\(escapedDst)'")
+        }
+
+        let batchCommand = moveCommands.joined(separator: " && ")
+        let (code, _, error) = await Shell.runAsyncWithTimeout(
+            ADBManager.getADBPath(),
+            args: ADBManager.deviceArgs(["shell", batchCommand]),
+            timeoutSeconds: 30.0
+        )
+
+        if code == 0 {
+            successCount = items.count
+            successPaths = items.map { $0.dest }
+        } else {
+            // Batch failed — fall back to individual moves
+            for (file, destFile) in items {
+                do {
+                    try await ADBManager.renameFile(oldPath: file.path, newPath: destFile)
+                    successPaths.append(destFile)
+                    successCount += 1
+                } catch {
+                    failedItems.append((file.name, error.localizedDescription))
+                }
+            }
+        }
+
+        // Trigger media scan for all moved files
+        if !successPaths.isEmpty {
+            Task.detached(priority: .background) {
+                for path in successPaths {
+                    await ADBManager.triggerMediaScan(path: path)
+                }
+            }
+        }
+
+        await MainActor.run {
+            isPerformingAction = false
+            currentAction      = ""
+            if !failedItems.isEmpty {
+                lastError = "Failed to move \(failedItems.count) item(s):\n"
+                    + failedItems.map { "\($0.name): \($0.error)" }.joined(separator: "\n")
+            }
+        }
+    }
     
     /// Generates a guaranteed-unique destination path for "Keep Both".
     /// Probes the device via ADB: photo.jpg → photo_copy.jpg → photo_copy_2.jpg → …

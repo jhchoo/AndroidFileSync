@@ -63,6 +63,10 @@ struct FileBrowserView: View {
     var onNewFolder: (() -> Void)? = nil
     var onClearClipboard: (() -> Void)? = nil
     
+    // Drag and drop move support
+    var onMoveFiles: (([UnifiedFile], String) -> Void)? = nil
+    var onUploadToFolder: (([URL], String) -> Void)? = nil
+    
     // Deletion support
     var activeDeletions: [LiveDeletion] = []
     var onCancelDeletion: ((UUID) -> Void)? = nil
@@ -414,6 +418,7 @@ struct FileBrowserView: View {
             BreadcrumbButton(title: item.name) {
                 onNavigate(item.path)
             }
+            .breadcrumbDropTarget(path: item.path, isCurrent: item.isCurrent, onMoveFiles: onMoveFiles, onUploadToFolder: onUploadToFolder)
         }
     }
 
@@ -819,7 +824,12 @@ struct FileBrowserView: View {
             isEnabled: isInteractionEnabled, onClick: handleClick, onOpen: handleOpen,
             onRename: handleRenameSelection,
             onSpace: handleSpaceAction,
-            onDrag: handleMarquee, onMarqueeChange: { marqueeRectangle = $0 })
+            onDrag: handleMarquee, onMarqueeChange: { marqueeRectangle = $0 },
+            onItemDrag: { indexes, event, view in
+                let filesToDrag = indexes.sorted().compactMap { files.indices.contains($0) ? files[$0] : nil }
+                guard !filesToDrag.isEmpty else { return }
+                FileDragManager.shared.startDrag(with: filesToDrag, from: view, event: event)
+            })
     }
 
     @ViewBuilder
@@ -902,6 +912,7 @@ struct FileBrowserView: View {
                                 fallbackColor: getFileColor(for: file),
                                 detailText: tileDetailText(for: file)
                             )
+                            .folderDropTarget(folder: file, onMoveFiles: onMoveFiles, onUploadToFolder: onUploadToFolder)
                             .background(
                                 GeometryReader { itemGeometry in
                                     Color.clear.preference(key: FileBrowserItemFrames.self, value: [
@@ -959,15 +970,24 @@ struct FileBrowserView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .folderDropTarget(folder: file, onMoveFiles: onMoveFiles, onUploadToFolder: onUploadToFolder)
             }
             
             TableColumn("Size", value: \.size) { file in
                 sizeColumnContent(for: file)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .folderDropTarget(folder: file, onMoveFiles: onMoveFiles, onUploadToFolder: onUploadToFolder)
             }
             .width(min: 70, ideal: 90, max: 110)
             
             TableColumn("Date", value: \.sortableDate) { file in
                 dateColumnContent(for: file)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .folderDropTarget(folder: file, onMoveFiles: onMoveFiles, onUploadToFolder: onUploadToFolder)
             }
             .width(min: 160, ideal: 170, max: 200)
             
@@ -975,6 +995,9 @@ struct FileBrowserView: View {
                 Text(file.isDirectory ? "Folder" : getFileType(for: file))
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .folderDropTarget(folder: file, onMoveFiles: onMoveFiles, onUploadToFolder: onUploadToFolder)
             }
             // No .width() — fills remaining space, eliminates trailing column separator
         }

@@ -10,6 +10,8 @@ struct SidebarView: View {
     var activeAppFilter: AppFilter? = nil
     var onSelectAppFilter: ((AppFilter) -> Void)? = nil
     var storageStats: [String: DeviceManager.StorageInfo] = [:]
+    var onMoveFiles: (([UnifiedFile], String) -> Void)? = nil
+    var onUploadToFolder: (([URL], String) -> Void)? = nil
 
     @State private var showRestoreAlert = false
     
@@ -34,22 +36,26 @@ struct SidebarView: View {
         }
     }
 
+    private var displayedQuickAccessItems: [QuickAccessItem] {
+        sidebarManager.visibleItems.filter { item in
+            !sidebarManager.checkedPaths.contains(item.path) || sidebarManager.existingPaths.contains(item.path)
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             List(selection: selectionBinding) {
 
                 // ── Quick Access ────────────────────────────────────────────────
                 Section {
-                    ForEach(sidebarManager.visibleItems.filter { item in
-                        !sidebarManager.checkedPaths.contains(item.path)
-                            || sidebarManager.existingPaths.contains(item.path)
-                    }) { item in
+                    ForEach(displayedQuickAccessItems) { item in
                         QuickAccessRow(
                             item: item,
                             isChecking: !sidebarManager.checkedPaths.contains(item.path),
                             storageInfo: storageStats[item.path],
                             onRemove: { sidebarManager.removeItem(item) }
                         )
+                        .folderDropTarget(folderPath: item.path, isFolder: true, onMoveFiles: onMoveFiles, onUploadToFolder: onUploadToFolder)
                         .tag(SidebarItem.folder(item.path))
                     }
                 } header: {
