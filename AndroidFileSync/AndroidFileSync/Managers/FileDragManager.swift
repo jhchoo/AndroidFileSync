@@ -3,13 +3,79 @@
 //  AndroidFileSync
 //
 //  Created for AndroidFileSync.
-//  Manages drag-and-drop operations for moving files into folders.
+//  Manages drag-and-drop operations for moving files into folders
+//  and exporting files to Finder / macOS via file promises.
 //
 
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 internal import Combine
+
+// MARK: - UnifiedFilePromiseProvider
+
+/// File promise provider that enables dragging files out of AndroidFileSync to Finder,
+/// while simultaneously providing internal drag metadata for moving files within the app.
+final class UnifiedFilePromiseProvider: NSFilePromiseProvider {
+    let file: UnifiedFile
+    let allFiles: [UnifiedFile]
+
+    init(file: UnifiedFile, allFiles: [UnifiedFile], delegate: NSFilePromiseProviderDelegate) {
+        self.file = file
+        self.allFiles = allFiles
+        super.init()
+        self.fileType = Self.fileType(for: file)
+        self.delegate = delegate
+        self.userInfo = file
+    }
+
+    static func fileType(for file: UnifiedFile) -> String {
+        if file.isDirectory {
+            return UTType.folder.identifier
+        }
+        let ext = (file.name as NSString).pathExtension
+        if !ext.isEmpty, let utType = UTType(filenameExtension: ext) {
+            return utType.identifier
+        }
+        return UTType.data.identifier
+    }
+
+    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
+        var types = super.writableTypes(for: pasteboard)
+        let internalType = NSPasteboard.PasteboardType(FileDragManager.internalFileUTI)
+        if !types.contains(internalType) {
+            types.append(internalType)
+        }
+        if !types.contains(.string) {
+            types.append(.string)
+        }
+        return types
+    }
+
+    override func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions {
+        if type.rawValue == FileDragManager.internalFileUTI || type == .string {
+            return []
+        }
+        return super.writingOptions(forType: type, pasteboard: pasteboard)
+    }
+
+    override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+        if type.rawValue == FileDragManager.internalFileUTI {
+            let paths = allFiles.map(\.path)
+            if let jsonData = try? JSONEncoder().encode(paths),
+               let jsonString = String(data: jsonData, encoding: .utf8) {
+                return jsonString
+            }
+            return file.path
+        }
+        if type == .string {
+            return allFiles.map(\.path).joined(separator: "\n")
+        }
+        return super.pasteboardPropertyList(forType: type)
+    }
+}
+
+// MARK: - FileDragManager
 
 @MainActor
 final class FileDragManager: NSObject, ObservableObject, NSDraggingSource {
@@ -20,21 +86,21 @@ final class FileDragManager: NSObject, ObservableObject, NSDraggingSource {
 
     @Published private(set) var draggedFiles: [UnifiedFile] = []
     @Published private(set) var isDragging: Bool = false
+    weak var downloadManager: DownloadManager?
+
+    private static let promiseOperationQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "com.androidfilesync.dragdrop.promises"
+        queue.maxConcurrentOperationCount = 4
+        queue.qualityOfService = .userInitiated
+        return queue
+    }()
 
     func startDrag(with files: [UnifiedFile], from view: NSView, event: NSEvent) {
         guard !files.isEmpty else { return }
         self.draggedFiles = files
         self.isDragging = true
 
-        let pbItem = NSPasteboardItem()
-        let paths = files.map(\.path)
-        if let jsonData = try? JSONEncoder().encode(paths),
-           let jsonString = String(data: jsonData, encoding: .utf8) {
-            pbItem.setString(jsonString, forType: NSPasteboard.PasteboardType(Self.internalFileUTI))
-        }
-        pbItem.setString(paths.joined(separator: "\n"), forType: .string)
-
-        let dragItem = NSDraggingItem(pasteboardWriter: pbItem)
         let image = Self.createDragImage(for: files)
         let mouseInView = view.convert(event.locationInWindow, from: nil)
         let frame = NSRect(
@@ -43,9 +109,21 @@ final class FileDragManager: NSObject, ObservableObject, NSDraggingSource {
             width: image.size.width,
             height: image.size.height
         )
-        dragItem.setDraggingFrame(frame, contents: image)
 
-        view.beginDraggingSession(with: [dragItem], event: event, source: self)
+        let dragItems: [NSDraggingItem] = files.enumerated().map { index, file in
+            let provider = UnifiedFilePromiseProvider(
+                file: file,
+                allFiles: files,
+                delegate: self
+            )
+            let item = NSDraggingItem(pasteboardWriter: provider)
+            let itemFrame = index == 0 ? frame : NSRect(origin: frame.origin, size: .zero)
+            let itemContents: Any? = index == 0 ? image : NSImage()
+            item.setDraggingFrame(itemFrame, contents: itemContents)
+            return item
+        }
+
+        view.beginDraggingSession(with: dragItems, event: event, source: self)
     }
 
     func clearDrag() {
@@ -56,7 +134,14 @@ final class FileDragManager: NSObject, ObservableObject, NSDraggingSource {
     // MARK: - NSDraggingSource
 
     nonisolated func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-        return .move
+        switch context {
+        case .outsideApplication:
+            return .copy
+        case .withinApplication:
+            return .move
+        @unknown default:
+            return [.copy, .move]
+        }
     }
 
     nonisolated func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
@@ -176,5 +261,117 @@ final class FileDragManager: NSObject, ObservableObject, NSDraggingSource {
         }
 
         return image
+    }
+}
+
+// MARK: - NSFilePromiseProviderDelegate
+
+extension FileDragManager: NSFilePromiseProviderDelegate {
+    nonisolated func filePromiseProvider(
+        _ filePromiseProvider: NSFilePromiseProvider,
+        fileNameForType fileType: String
+    ) -> String {
+        let name: String
+        if let promise = filePromiseProvider as? UnifiedFilePromiseProvider {
+            name = promise.file.name
+        } else if let file = filePromiseProvider.userInfo as? UnifiedFile {
+            name = file.name
+        } else {
+            name = "file"
+        }
+        let safeName = name.replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+        return safeName.isEmpty ? "file" : safeName
+    }
+
+    nonisolated func operationQueue(for filePromiseProvider: NSFilePromiseProvider) -> OperationQueue {
+        return Self.promiseOperationQueue
+    }
+
+    nonisolated func filePromiseProvider(
+        _ filePromiseProvider: NSFilePromiseProvider,
+        writePromiseTo url: URL,
+        completionHandler: @escaping ((any Error)?) -> Void
+    ) {
+        guard let file = (filePromiseProvider as? UnifiedFilePromiseProvider)?.file
+                ?? filePromiseProvider.userInfo as? UnifiedFile else {
+            completionHandler(NSError(
+                domain: "com.androidfilesync.dragdrop",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Missing file information for promise."]
+            ))
+            return
+        }
+
+        Task {
+            do {
+                if file.isDirectory {
+                    try await Self.downloadFolderPromise(file: file, destinationURL: url)
+                } else {
+                    try await Self.downloadFilePromise(file: file, destinationURL: url)
+                }
+                AppLogger.log("✅ Drag to Finder copy completed: \(file.name) → \(url.path)")
+                completionHandler(nil)
+            } catch {
+                AppLogger.log("❌ Drag to Finder copy failed for \(file.name): \(error.localizedDescription)", level: .error)
+                completionHandler(error)
+            }
+        }
+    }
+
+    private static func downloadFilePromise(file: UnifiedFile, destinationURL: URL) async throws {
+        let parentDir = destinationURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
+
+        let manager = await MainActor.run { FileDragManager.shared.downloadManager }
+        if let manager = manager {
+            try await manager.downloadFile(
+                devicePath: file.path,
+                fileName: file.name,
+                fileSize: file.size,
+                to: destinationURL.path
+            )
+        } else {
+            let cleanPath = FileNameHelper.cleanRemotePath(file.path)
+            let adbPath = ADBManager.getADBPath()
+            let (code, _, err) = await Shell.runAsync(
+                adbPath,
+                args: ADBManager.deviceArgs(["pull", "-a", cleanPath, destinationURL.path])
+            )
+            if code != 0 {
+                throw NSError(
+                    domain: "com.androidfilesync.adb",
+                    code: Int(code),
+                    userInfo: [NSLocalizedDescriptionKey: err.isEmpty ? "ADB pull failed with code \(code)" : err]
+                )
+            }
+        }
+    }
+
+    private static func downloadFolderPromise(file: UnifiedFile, destinationURL: URL) async throws {
+        try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+
+        let manager = await MainActor.run { FileDragManager.shared.downloadManager }
+        if let manager = manager {
+            await manager.downloadFolder(
+                devicePath: file.path,
+                folderName: file.name,
+                to: destinationURL
+            )
+        } else {
+            let cleanPath = FileNameHelper.cleanRemotePath(file.path)
+            let adbPath = ADBManager.getADBPath()
+            let (code, _, err) = await Shell.runAsync(
+                adbPath,
+                args: ADBManager.deviceArgs(["pull", "-a", "\(cleanPath)/.", destinationURL.path])
+            )
+            if code != 0 {
+                throw NSError(
+                    domain: "com.androidfilesync.adb",
+                    code: Int(code),
+                    userInfo: [NSLocalizedDescriptionKey: err.isEmpty ? "ADB folder pull failed with code \(code)" : err]
+                )
+            }
+        }
     }
 }

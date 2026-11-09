@@ -36,6 +36,7 @@ struct AndroidFileSyncApp: App {
                 appDelegate.deviceManager = deviceManager
                 appDelegate.downloadManager = downloadManager
                 appDelegate.uploadManager = uploadManager
+                FileDragManager.shared.downloadManager = downloadManager
             }
         }
         .defaultSize(width: 1050, height: 660)
@@ -78,7 +79,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         AppLogger.addSessionSeparator()
         AppLogger.log("🚀 AndroidFileSync started successfully on macOS.")
-        AppLogger.log("🔏 [AppIdentity] \(AppCodeSigning.diagnosticDescription)",
+        AppLogger.log("🔐 [AppIdentity] \(AppCodeSigning.diagnosticDescription)",
                       level: AppCodeSigning.hasAppleIdentity ? .info : .warning)
         guard let window = NSApp.windows.first,
               let contentView = window.contentView else {

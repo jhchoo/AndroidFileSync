@@ -945,6 +945,7 @@ struct ContentView: View {
             downloadManager.appManager = appManager
             uploadManager.downloadManager = downloadManager
             downloadManager.uploadManager = uploadManager
+            FileDragManager.shared.downloadManager = downloadManager
             appManager.operationEngine.deviceManager = deviceManager
             appManager.operationEngine.uploadManager = uploadManager
             appManager.operationEngine.downloadManager = downloadManager
@@ -1324,7 +1325,8 @@ struct ContentView: View {
                     color: "blue"
                 )
             },
-            onPermanentDelete: handlePermanentDelete,
+            onPermanentDelete: { handlePermanentDelete() },
+            onPermanentDeleteFiles: { files in handlePermanentDelete(files: files) },
             clipboardCount: fileActionManager.clipboard.count,
             clipboardOperation: fileActionManager.clipboardOperation,
             onPaste: {
@@ -1413,6 +1415,7 @@ struct ContentView: View {
                 )
             },
             onPermanentDelete: { handleSecondaryPermanentDelete() },
+            onPermanentDeleteFiles: { files in handleSecondaryPermanentDelete(files: files) },
             clipboardCount: fileActionManager.clipboard.count,
             clipboardOperation: fileActionManager.clipboardOperation,
             onPaste: {
@@ -1625,18 +1628,18 @@ struct ContentView: View {
         }
     }
 
-    private func handleSecondaryPermanentDelete() {
-        let filesToDelete = secondaryFiles.filter { secondarySelectedFiles.contains($0.id) }
-        guard !filesToDelete.isEmpty else { return }
+    private func handleSecondaryPermanentDelete(files filesToDelete: [UnifiedFile]? = nil) {
+        let targets = filesToDelete ?? secondaryFiles.filter { secondarySelectedFiles.contains($0.id) }
+        guard !targets.isEmpty else { return }
 
-        let deletedIDs = Set(filesToDelete.map { $0.id })
+        let deletedIDs = Set(targets.map { $0.id })
         secondaryFiles.removeAll { deletedIDs.contains($0.id) }
         updateSecondaryDisplayedFiles()
-        secondarySelectedFiles.removeAll()
+        secondarySelectedFiles.subtract(deletedIDs)
 
         Task {
             do {
-                try await fileActionManager.deleteFiles(filesToDelete, permanent: true)
+                try await fileActionManager.deleteFiles(targets, permanent: true)
                 ADBManager.invalidateFolderSizeCache()
                 await deviceManager.fetchStorageInfo()
             } catch {
@@ -2681,18 +2684,18 @@ struct ContentView: View {
         }
     }
 
-    private func handlePermanentDelete() {
-        let filesToDelete = files.filter { selectedFiles.contains($0.id) }
-        guard !filesToDelete.isEmpty else { return }
+    private func handlePermanentDelete(files filesToDelete: [UnifiedFile]? = nil) {
+        let targets = filesToDelete ?? files.filter { selectedFiles.contains($0.id) }
+        guard !targets.isEmpty else { return }
         
-        let deletedIDs = Set(filesToDelete.map { $0.id })
+        let deletedIDs = Set(targets.map { $0.id })
         files.removeAll { deletedIDs.contains($0.id) }
         updateDisplayedFiles()
-        selectedFiles.removeAll()
+        selectedFiles.subtract(deletedIDs)
         
         Task {
             do {
-                try await fileActionManager.deleteFiles(filesToDelete, permanent: true)
+                try await fileActionManager.deleteFiles(targets, permanent: true)
                 ADBManager.invalidateFolderSizeCache()
                 await deviceManager.fetchStorageInfo()
             } catch {

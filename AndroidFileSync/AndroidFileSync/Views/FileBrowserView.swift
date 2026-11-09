@@ -54,6 +54,7 @@ struct FileBrowserView: View {
     var onAddToSidebar: ((UnifiedFile) -> Void)? = nil
     /// Called when the user chooses "Delete Permanently" from the selection toolbar
     var onPermanentDelete: (() -> Void)? = nil
+    var onPermanentDeleteFiles: (([UnifiedFile]) -> Void)? = nil
     
     // Clipboard support
     var clipboardCount: Int = 0
@@ -138,6 +139,8 @@ struct FileBrowserView: View {
     @State private var fileToDelete: UnifiedFile? = nil
     @State private var showBatchDeleteConfirmation = false
     @State private var batchDeleteCount = 0
+    @State private var showPermanentDeleteConfirmation = false
+    @State private var filesToPermanentlyDelete: [UnifiedFile] = []
 
     // Change extension state (for context menu)
     @State private var showExtensionDialog = false
@@ -213,6 +216,28 @@ struct FileBrowserView: View {
             }
         } message: {
             Text("You can restore these items from the Trash.")
+        }
+        // Permanent delete confirmation alert
+        .alert(
+            filesToPermanentlyDelete.count <= 1
+                ? "Permanently delete \(filesToPermanentlyDelete.first?.name ?? "item")?"
+                : "Permanently delete \(filesToPermanentlyDelete.count) items?",
+            isPresented: $showPermanentDeleteConfirmation
+        ) {
+            Button("Cancel", role: .cancel) {
+                filesToPermanentlyDelete = []
+            }
+            Button("Delete Permanently", role: .destructive) {
+                let targets = filesToPermanentlyDelete
+                filesToPermanentlyDelete = []
+                if let onPermanentDeleteFiles {
+                    onPermanentDeleteFiles(targets)
+                } else {
+                    onPermanentDelete?()
+                }
+            }
+        } message: {
+            Text("This cannot be undone. The item\(filesToPermanentlyDelete.count == 1 ? " will" : "s will") be permanently removed from the device.")
         }
     }
     
@@ -1183,6 +1208,12 @@ struct FileBrowserView: View {
                                 showBatchDeleteConfirmation = true
                             }
                         }
+
+                        // 완전 삭제
+                        Button(isSingleSelection ? "완전 삭제" : "\(selectedIds.count)개 항목 완전 삭제", role: .destructive) {
+                            filesToPermanentlyDelete = selectedItems
+                            showPermanentDeleteConfirmation = true
+                        }
                     }
                     }
                 }, primaryAction: { selectedIds in
@@ -1322,6 +1353,13 @@ struct FileBrowserView: View {
             }
         }
         .disabled(onDelete == nil)
+
+        // 완전 삭제
+        Button(isSingleSelection ? "완전 삭제" : "\(targetIDs.count)개 항목 완전 삭제", role: .destructive) {
+            filesToPermanentlyDelete = isSingleSelection ? [file] : selectedItems
+            showPermanentDeleteConfirmation = true
+        }
+        .disabled(onPermanentDelete == nil && onPermanentDeleteFiles == nil)
     }
 
     // MARK: - Context Menu Helpers
