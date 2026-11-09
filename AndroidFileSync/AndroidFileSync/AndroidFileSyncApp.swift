@@ -11,6 +11,8 @@ extension Notification.Name {
     static let afsDownloadBatchStateChanged = Notification.Name("afsDownloadBatchStateChanged")
     static let afsUploadBatchStateChanged = Notification.Name("afsUploadBatchStateChanged")
     static let afsDeletionsChanged = Notification.Name("afsDeletionsChanged")
+    static let afsMouseNavigateBack = Notification.Name("afsMouseNavigateBack")
+    static let afsMouseNavigateForward = Notification.Name("afsMouseNavigateForward")
 } 
 
 @main
@@ -48,6 +50,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let dropCoordinator = DropCoordinator()
     private let showQuitDebuggingReminderKey = "showQuitDebuggingReminder"
     private var localKeyMonitor: Any?
+    private var localMouseMonitor: Any?
     private var terminationTask: Task<Void, Never>?
     private var terminationTimer: Timer?
     private var isTerminationInProgress = false
@@ -91,6 +94,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         (contentView as? NSView)?.window?.registerForDraggedTypes([.fileURL])
         
         installDeleteShortcutMonitor()
+        installMouseNavigationMonitor()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -126,6 +130,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         removeLocalKeyMonitor()
+        removeLocalMouseMonitor()
         terminationTimer?.invalidate()
         terminationTimer = nil
         terminationTask?.cancel()
@@ -143,6 +148,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let wirelessTargets = ADBManager.appManagedWirelessCleanupTargets()
         let disconnectAll = UserDefaults.standard.object(forKey: "disconnectAllWirelessOnQuit") as? Bool ?? true
         removeLocalKeyMonitor()
+        removeLocalMouseMonitor()
         AppProcessLifecycle.beginTermination()
         deviceManager?.stopMonitoring()
         WirelessDiscovery.shared.stop()
@@ -213,6 +219,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let localKeyMonitor {
             NSEvent.removeMonitor(localKeyMonitor)
             self.localKeyMonitor = nil
+        }
+    }
+
+    private func removeLocalMouseMonitor() {
+        if let localMouseMonitor {
+            NSEvent.removeMonitor(localMouseMonitor)
+            self.localMouseMonitor = nil
+        }
+    }
+
+    private func installMouseNavigationMonitor() {
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseDown, .otherMouseUp]) { event in
+            guard NSApp.modalWindow == nil else { return event }
+            guard NSApp.keyWindow?.attachedSheet == nil else { return event }
+
+            // Mouse button numbers in macOS AppKit:
+            // 0: Left, 1: Right, 2: Middle
+            // 3: Back button (Mouse 4)
+            // 4: Forward button (Mouse 5)
+            if event.buttonNumber == 3 {
+                if event.type == .otherMouseDown {
+                    NotificationCenter.default.post(name: .afsMouseNavigateBack, object: nil)
+                }
+                return nil
+            } else if event.buttonNumber == 4 {
+                if event.type == .otherMouseDown {
+                    NotificationCenter.default.post(name: .afsMouseNavigateForward, object: nil)
+                }
+                return nil
+            }
+            return event
         }
     }
 

@@ -2992,12 +2992,14 @@ class ADBManager {
     static func createFolder(at path: String) async throws {
         let adbPath = getADBPath()
         let escapedPath = path.replacingOccurrences(of: "'", with: "'\\''")
-        let command = "mkdir -p '\(escapedPath)'"
+        AppLogger.log("📁 [createFolder] Request to create folder at: \(path)")
+        let command = "mkdir -p '\(escapedPath)' && (chmod 775 '\(escapedPath)' 2>/dev/null || true)"
         
         let (code, output, stderr) = await Shell.runAsync(adbPath, args: deviceArgs(["shell", command]))
         let error = AndroidStorageAccess.commandError((code, output, stderr), fallback: "Failed to create folder")
         
         if code != 0 {
+            AppLogger.log("❌ [createFolder] Failed with code \(code), error: \(error), stderr: \(stderr)", level: .error)
             if error.contains("Read-only") {
                 throw NSError(domain: "ADB", code: Int(code), userInfo: [NSLocalizedDescriptionKey: "Cannot create folder: File system is read-only"])
             } else if error.contains("Permission denied") {
@@ -3007,6 +3009,11 @@ class ADBManager {
             }
         }
         
+        AppLogger.log("✅ [createFolder] Successfully created folder: \(path)")
+        // Inform MediaStore about the new directory so subsequent moves/renames succeed
+        Task.detached(priority: .background) {
+            await triggerMediaScan(path: path)
+        }
     }
     
     /// Creates multiple folders on the Android device in batched ADB calls.

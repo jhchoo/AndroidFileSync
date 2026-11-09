@@ -465,6 +465,7 @@ struct ContentView: View {
                     // ── File actions ──────────────────────────────────────
                     Button("") { handleGetInfo() }.keyboardShortcut("i", modifiers: .command)
                     Button("") { handleRenameShortcut() }.keyboardShortcut("r", modifiers: [.command, .shift])
+                    Button("") { handleRenameShortcut() }.keyboardShortcut(.return, modifiers: [])
                     Button("") { handleQuickPreview() }.keyboardShortcut(.space, modifiers: [])
                     Button("") {
                         if filePreviewManager.showPreviewPanel {
@@ -481,6 +482,13 @@ struct ContentView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .afsPermanentDeleteShortcut)) { _ in
                 handlePermanentDeleteShortcut()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .afsMouseNavigateBack)) { _ in
+                handleMouseBack()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .afsMouseNavigateForward)) { _ in
+                guard activeAppFilter == nil else { return }
+                navigateForward()
             }
             .onReceive(NotificationCenter.default.publisher(for: .afsDeletionsChanged)) { _ in
                 updateDisplayedFiles()
@@ -1013,12 +1021,26 @@ struct ContentView: View {
                                     do {
                                         try await fileActionManager.paste(to: currentPath)
                                     } catch {
-                                        print("❌ Paste failed: \(error.localizedDescription)")
+                                        AppLogger.log("❌ [onPaste] Paste failed: \(error.localizedDescription)", level: .error)
+                                        presentFileOperationError(error)
                                     }
                                     await loadFiles()
                                     await deviceManager.fetchStorageInfo()
                                 }
                             },
+                            onPasteToFolder: { targetFolder in
+                                Task {
+                                    do {
+                                        try await fileActionManager.paste(to: targetFolder)
+                                    } catch {
+                                        AppLogger.log("❌ [onPasteToFolder] Paste failed: \(error.localizedDescription)", level: .error)
+                                        presentFileOperationError(error)
+                                    }
+                                    await loadFiles()
+                                    await deviceManager.fetchStorageInfo()
+                                }
+                            },
+                            onNewFolder: handleCreateNewFolder,
                             onClearClipboard: { fileActionManager.clearClipboard() },
                             activeDeletions: fileActionManager.activeDeletions,
                             onCancelDeletion: { id in fileActionManager.cancelDeletion(id: id) },
@@ -1051,22 +1073,7 @@ struct ContentView: View {
                 // ── Left side: New Folder + New File ─────────────────────────
                 ToolbarItemGroup(placement: .automatic) {
                     Button {
-                        if activeAppFilter == nil,
-                           let name = TextInputDialog.show(
-                            title: "New Folder",
-                            message: "Enter a name for the new folder",
-                            placeholder: "Folder name",
-                            initialValue: "New Folder",
-                            confirmLabel: "Create"
-                        ) {
-                            Task {
-                                do {
-                                    try await fileActionManager.createFolder(at: currentPath, name: name)
-                                    await loadFiles()
-                                    await deviceManager.fetchStorageInfo()
-                                } catch { presentFileOperationError(error) }
-                            }
-                        }
+                        handleCreateNewFolder()
                     } label: {
                         Label("New Folder", systemImage: "folder.badge.plus")
                     }
@@ -1228,6 +1235,28 @@ struct ContentView: View {
         fileActionManager.cutToClipboard(items)
     }
     
+    private func handleCreateNewFolder() {
+        guard activeAppFilter == nil else { return }
+        if let name = TextInputDialog.show(
+            title: "New Folder",
+            message: "Enter a name for the new folder",
+            placeholder: "Folder name",
+            initialValue: "New Folder",
+            confirmLabel: "Create"
+        ) {
+            Task {
+                do {
+                    try await fileActionManager.createFolder(at: currentPath, name: name)
+                    await loadFiles()
+                    await deviceManager.fetchStorageInfo()
+                } catch {
+                    AppLogger.log("❌ [handleCreateNewFolder] Failed to create folder '\(name)': \(error.localizedDescription)", level: .error)
+                    presentFileOperationError(error)
+                }
+            }
+        }
+    }
+
     private func handleGlobalPaste() {
         if !fileActionManager.clipboard.isEmpty {
             // Internal paste — sequential: paste first, then refresh once.
@@ -1235,7 +1264,8 @@ struct ContentView: View {
                 do {
                     try await fileActionManager.paste(to: currentPath)
                 } catch {
-                    print("❌ Paste failed: \(error.localizedDescription)")
+                    AppLogger.log("❌ [handleGlobalPaste] Paste failed: \(error.localizedDescription)", level: .error)
+                    presentFileOperationError(error)
                 }
                 await loadFiles()
                 await deviceManager.fetchStorageInfo()
@@ -1268,8 +1298,16 @@ struct ContentView: View {
         selectedFiles.removeAll()
     }
     
+    private func handleMouseBack() {
+        guard activeAppFilter == nil else { return }
+        handleNavigateUp()
+    }
+
     private func handleNavigateUp() {
         guard activeAppFilter == nil else { return }
+        let root = AndroidStorageAccess.storageRoot(for: currentPath) ?? "/storage/emulated/0"
+        guard currentPath != root && currentPath != root + "/" else { return }
+
         // Navigate to the parent directory of currentPath
         let parent = (currentPath as NSString).deletingLastPathComponent
         // Don't go above root

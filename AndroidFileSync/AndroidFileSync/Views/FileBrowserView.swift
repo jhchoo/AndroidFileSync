@@ -59,6 +59,8 @@ struct FileBrowserView: View {
     var clipboardCount: Int = 0
     var clipboardOperation: FileActionManager.ClipboardOperation = .none
     var onPaste: (() -> Void)? = nil
+    var onPasteToFolder: ((String) -> Void)? = nil
+    var onNewFolder: (() -> Void)? = nil
     var onClearClipboard: (() -> Void)? = nil
     
     // Deletion support
@@ -280,70 +282,139 @@ struct FileBrowserView: View {
         }
     }
     
+    // MARK: - Breadcrumb Navigation
+
+    struct BreadcrumbItem: Identifiable, Equatable {
+        var id: String { path }
+        let name: String
+        let path: String
+        let isCurrent: Bool
+    }
+
+    private var breadcrumbItems: [BreadcrumbItem] {
+        let root = deviceStorageRoot
+        let current = currentPath
+
+        var items: [BreadcrumbItem] = []
+
+        if current == root || current == root + "/" {
+            items.append(BreadcrumbItem(name: "Internal Storage", path: root, isCurrent: true))
+            return items
+        }
+
+        if current.hasPrefix(root) {
+            items.append(BreadcrumbItem(name: "Internal Storage", path: root, isCurrent: false))
+            let relative = current.dropFirst(root.count)
+            let rawParts = relative.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+            var accumulated = root
+            for (idx, part) in rawParts.enumerated() {
+                accumulated += "/" + part
+                let isLast = (idx == rawParts.count - 1)
+                items.append(BreadcrumbItem(name: part, path: accumulated, isCurrent: isLast))
+            }
+        } else {
+            // Path outside standard storage root (e.g. /sdcard alias, /data/local/tmp, or custom root)
+            let parts = current.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+            if parts.isEmpty {
+                items.append(BreadcrumbItem(name: "/", path: "/", isCurrent: true))
+            } else {
+                var accumulated = ""
+                for (idx, part) in parts.enumerated() {
+                    accumulated += "/" + part
+                    let isLast = (idx == parts.count - 1)
+                    items.append(BreadcrumbItem(name: part, path: accumulated, isCurrent: isLast))
+                }
+            }
+        }
+
+        return items
+    }
+
     // Breadcrumb segments built from current path
     private var breadcrumbPath: some View {
-        let allSegments = displayPathSegments
-        // For deep paths, collapse middle segments: first > … > parent > current
-        let segments: [(text: String, isCollapsed: Bool)]
-        if allSegments.count > 3 {
-            segments = [
-                (allSegments[0], false),
-                ("…", true),
-                (allSegments[allSegments.count - 2], false),
-                (allSegments[allSegments.count - 1], false)
-            ]
-        } else {
-            segments = allSegments.map { ($0, false) }
-        }
-        
-        return HStack(spacing: 2) {
-            if segments.isEmpty {
+        let allItems = breadcrumbItems
+
+        return HStack(spacing: 3) {
+            if allItems.isEmpty {
                 Text("/")
-                    .font(.system(size: 14))
+                    .font(.system(size: 13))
                     .foregroundColor(.secondary)
-            }
-            
-            ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
-                if index > 0 {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
-                }
-                if segment.isCollapsed {
-                    Text(segment.text)
-                        .font(.system(size: 14))
-                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
-                } else if index == segments.count - 1 {
-                    // Last segment (current folder) — never truncate
-                    Text(segment.text)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                } else {
-                    // Intermediate segments — allow truncation
-                    Text(segment.text)
-                        .font(.system(size: 14))
+            } else if allItems.count > 4 {
+                // Deep path: first > … (dropdown menu) > parent > current
+                let first = allItems[0]
+                let hidden = Array(allItems[1..<(allItems.count - 2)])
+                let parent = allItems[allItems.count - 2]
+                let current = allItems[allItems.count - 1]
+
+                // 1. Root / First item
+                breadcrumbSegmentView(item: first)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
+
+                // 2. Collapsed menu for middle segments
+                Menu {
+                    ForEach(hidden) { item in
+                        Button(item.name) {
+                            onNavigate(item.path)
+                        }
+                    }
+                } label: {
+                    Text("…")
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(minWidth: 20, alignment: .leading)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.primary.opacity(0.05))
+                        )
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Show intermediate folders")
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
+
+                // 3. Parent item
+                breadcrumbSegmentView(item: parent)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundColor(Color(NSColor.tertiaryLabelColor))
+
+                // 4. Current folder
+                breadcrumbSegmentView(item: current)
+            } else {
+                // 4 or fewer segments: show all directly
+                ForEach(Array(allItems.enumerated()), id: \.offset) { index, item in
+                    if index > 0 {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                    }
+                    breadcrumbSegmentView(item: item)
                 }
             }
         }
     }
 
-    private var displayPathSegments: [String] {
-        let segments = currentPath
-            .split(separator: "/", omittingEmptySubsequences: true)
-            .map(String.init)
-
-        let internalStoragePrefix = deviceStorageRoot.split(separator: "/").map(String.init)
-        if segments.starts(with: internalStoragePrefix) {
-            return Array(segments.dropFirst(internalStoragePrefix.count))
+    @ViewBuilder
+    private func breadcrumbSegmentView(item: BreadcrumbItem) -> some View {
+        if item.isCurrent {
+            Text(item.name)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.primary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        } else {
+            BreadcrumbButton(title: item.name) {
+                onNavigate(item.path)
+            }
         }
-
-        return segments
     }
 
     private var deviceStorageRoot: String {
@@ -699,6 +770,22 @@ struct FileBrowserView: View {
         else { onDownload(file) }
     }
 
+    private func handleRenameSelection() {
+        guard let onRename = onRename else { return }
+        let selected = files.filter { selectedFiles.contains($0.id) }
+        guard selected.count == 1, let file = selected.first else { return }
+        let kind = file.isDirectory ? "Folder" : "File"
+        if let newName = TextInputDialog.show(
+            title: "Rename \(kind)",
+            message: "Enter a new name for \"\(file.name)\"",
+            placeholder: file.name,
+            initialValue: file.name,
+            confirmLabel: "Rename"
+        ), newName != file.name {
+            onRename(file, newName)
+        }
+    }
+
     private func handleMarquee(_ indexes: Set<Int>, anchor: Int?, focus: Int?) {
         selectedFiles = Set(indexes.filter { files.indices.contains($0) }.map { files[$0].id })
         selectionNavigator.setMarqueeSelection(
@@ -720,6 +807,7 @@ struct FileBrowserView: View {
             frames[file.id].map { (index, $0) }
         }), selectedIndexes: Set(files.indices.filter { selection.contains(files[$0].id) }),
             isEnabled: isInteractionEnabled, onClick: handleClick, onOpen: handleOpen,
+            onRename: handleRenameSelection,
             onDrag: handleMarquee, onMarqueeChange: { marqueeRectangle = $0 })
     }
 
@@ -968,6 +1056,18 @@ struct FileBrowserView: View {
                                 onCut?(items)
                             }
                             
+                            // Paste into Folder (if a single directory is selected)
+                            if isSingleSelection && firstItem.isDirectory && clipboardCount > 0 && onPasteToFolder != nil {
+                                Button {
+                                    onPasteToFolder?(firstItem.path)
+                                } label: {
+                                    Label(
+                                        "Paste into \"\(firstItem.name)\"",
+                                        systemImage: clipboardOperation == .cut ? "scissors" : "doc.on.clipboard"
+                                    )
+                                }
+                            }
+                            
                             // Paste Here
                             if clipboardCount > 0 {
                                 Button {
@@ -1091,6 +1191,18 @@ struct FileBrowserView: View {
             onCut?(items)
         }
         
+        // Paste into Folder (if this is a single directory)
+        if isSingleSelection && file.isDirectory && clipboardCount > 0 && onPasteToFolder != nil {
+            Button {
+                onPasteToFolder?(file.path)
+            } label: {
+                Label(
+                    "Paste into \"\(file.name)\"",
+                    systemImage: clipboardOperation == .cut ? "scissors" : "doc.on.clipboard"
+                )
+            }
+        }
+        
         // Paste Here
         if clipboardCount > 0 {
             Button {
@@ -1149,6 +1261,17 @@ struct FileBrowserView: View {
 
     @ViewBuilder
     private var emptyAreaContextMenu: some View {
+        if onNewFolder != nil {
+            Button {
+                onNewFolder?()
+            } label: {
+                Label("New Folder", systemImage: "folder.badge.plus")
+            }
+            .keyboardShortcut("n", modifiers: [.command, .shift])
+            
+            Divider()
+        }
+        
         Button {
             onPaste?()
         } label: {
@@ -1299,6 +1422,35 @@ struct FileBrowserView: View {
         }
     }
 }
+
+// MARK: - Breadcrumb Button
+
+struct BreadcrumbButton: View {
+    let title: String
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundColor(isHovered ? .accentColor : .secondary)
+                .underline(isHovered)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(isHovered ? Color.accentColor.opacity(0.12) : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help("Go to \(title)")
+    }
+}
+
 // MARK: - Window Drag Area
 /// Fixed dimensions avoid the AppKit progress host's fractional constraints on macOS 27.
 struct LoadingSpinner: View {

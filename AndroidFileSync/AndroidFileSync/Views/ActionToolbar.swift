@@ -134,7 +134,7 @@ struct ActionToolbar: View {
                             do {
                                 try await fileActionManager.paste(to: currentPath)
                             } catch {
-                                print("❌ Paste failed: \(error.localizedDescription)")
+                                AppLogger.log("❌ [ActionToolbar] Paste failed: \(error.localizedDescription)", level: .error)
                             }
                             await onRefresh()
                         }

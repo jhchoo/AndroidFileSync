@@ -10,6 +10,7 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
     var isEnabled: Bool = true
     var onClick: ((Int?, NSEvent.ModifierFlags) -> Void)? = nil
     var onOpen: ((Int) -> Void)? = nil
+    var onRename: (() -> Void)? = nil
     var onDrag: ((Set<Int>, Int?, Int?) -> Void)? = nil
     var onMarqueeChange: ((CGRect?) -> Void)? = nil
 
@@ -27,6 +28,7 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
         view.onMove = onMove
         view.onClick = onClick
         view.onOpen = onOpen
+        view.onRename = onRename
         view.onDrag = onDrag
         view.onMarqueeChange = onMarqueeChange
     }
@@ -43,6 +45,7 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
         var onMove: ((MoveCommandDirection, NSEvent.ModifierFlags) -> Int?)?
         var onClick: ((Int?, NSEvent.ModifierFlags) -> Void)?
         var onOpen: ((Int) -> Void)?
+        var onRename: (() -> Void)?
         var onDrag: ((Set<Int>, Int?, Int?) -> Void)?
         var onMarqueeChange: ((CGRect?) -> Void)?
         private var monitor: Any?
@@ -165,6 +168,15 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
                   !(window.firstResponder is NSTextView), !(window.firstResponder is NSTextField),
                   window.firstResponder === self || (!isGrid && window.firstResponder === tableView()),
                   flags.intersection([.command, .option, .control]).isEmpty else { return event }
+
+            // Enter / Return key (36 = Return, 76 = Keypad Enter) -> Rename
+            if event.keyCode == 36 || event.keyCode == 76 {
+                if let onRename {
+                    onRename()
+                    return nil
+                }
+            }
+
             let direction: MoveCommandDirection
             switch event.keyCode {
             case 126: direction = .up
