@@ -20,6 +20,7 @@ struct FilePreviewPanel: View {
     
     @State private var appeared = false
     @State private var imageScale: CGFloat = 1.0
+    @State private var showPDFThumbnails = true
     
     var body: some View {
         ZStack {
@@ -64,8 +65,33 @@ struct FilePreviewPanel: View {
     
     // MARK: - Title Bar
     
+    private var isPDFPreview: Bool {
+        if case .pdfReady = previewManager.previewContent { return true }
+        return false
+    }
+
     private var titleBar: some View {
         HStack(spacing: 8) {
+            // PDF 썸네일 사이드바 토글 버튼 (맨 왼쪽)
+            if isPDFPreview {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showPDFThumbnails.toggle()
+                    }
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(showPDFThumbnails ? Color.accentColor : Color.secondary)
+                        .frame(width: 24, height: 24)
+                        .background(
+                            showPDFThumbnails ? Color.accentColor.opacity(0.15) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 5)
+                        )
+                }
+                .buttonStyle(.plain)
+                .help(showPDFThumbnails ? "사이드바 숨기기" : "사이드바 보기")
+            }
+
             // Category icon
             categoryIcon
                 .frame(width: 16, height: 16)
@@ -76,7 +102,13 @@ struct FilePreviewPanel: View {
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .frame(maxWidth: isPDFPreview ? 180 : 380, alignment: .leading)
             
+            // PDF 확대/축소 및 가로/세로 맞춤 컨트롤 바 (네비게이션바 좌측 영역)
+            if isPDFPreview {
+                PDFZoomControlBar(coordinator: pdfCoordinator)
+            }
+
             Spacer()
             
             // File size badge
@@ -100,8 +132,8 @@ struct FilePreviewPanel: View {
             .keyboardShortcut(.escape, modifiers: [])
             .accessibilityLabel("Close preview")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
     }
     
     // MARK: - Category Icon
@@ -290,12 +322,27 @@ struct FilePreviewPanel: View {
     // MARK: - PDF Preview
 
     private func pdfPreview(url: URL) -> some View {
-        ZStack(alignment: .trailing) {
+        HStack(spacing: 0) {
+            if showPDFThumbnails {
+                PDFThumbnailSidebarView(
+                    coordinator: pdfCoordinator,
+                    onToggleSidebar: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showPDFThumbnails.toggle()
+                        }
+                    }
+                )
+                .frame(width: 140)
+                .transition(.move(edge: .leading).combined(with: .opacity))
+
+                Rectangle()
+                    .fill(Color.black.opacity(0.35))
+                    .frame(width: 1)
+            }
+
             PDFKitRepresentable(url: url, coordinator: pdfCoordinator)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(NSColor.windowBackgroundColor))
-
-            PDFRightNavigationRail(coordinator: pdfCoordinator)
+                .background(Color(white: 0.18))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .transition(.opacity)
@@ -461,10 +508,14 @@ struct FilePreviewPanel: View {
 final class PDFPreviewCoordinator: ObservableObject {
     @Published var pageCount: Int = 1
     @Published var currentPageIndex: Int = 0
+    @Published var scaleFactor: CGFloat = 1.0
+    @Published var document: PDFDocument?
     private weak var currentPDFView: PDFView?
 
     func attach(pdfView: PDFView) {
         self.currentPDFView = pdfView
+        self.document = pdfView.document
+        self.scaleFactor = pdfView.scaleFactor
         updatePages()
 
         NotificationCenter.default.removeObserver(self, name: .PDFViewPageChanged, object: nil)
@@ -474,16 +525,28 @@ final class PDFPreviewCoordinator: ObservableObject {
             name: .PDFViewPageChanged,
             object: pdfView
         )
+
+        NotificationCenter.default.removeObserver(self, name: .PDFViewScaleChanged, object: nil)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleScaleChanged(_:)),
+            name: .PDFViewScaleChanged,
+            object: pdfView
+        )
     }
 
     func updatePages() {
         guard let doc = currentPDFView?.document else { return }
+        self.document = doc
         self.pageCount = max(doc.pageCount, 1)
         if let current = currentPDFView?.currentPage {
             let idx = doc.index(for: current)
             if idx >= 0 && idx < doc.pageCount {
                 self.currentPageIndex = idx
             }
+        }
+        if let pdfView = currentPDFView {
+            self.scaleFactor = pdfView.scaleFactor
         }
     }
 
@@ -498,12 +561,66 @@ final class PDFPreviewCoordinator: ObservableObject {
         }
     }
 
+    @objc private func handleScaleChanged(_ note: Notification) {
+        guard let pdfView = currentPDFView else { return }
+        if abs(self.scaleFactor - pdfView.scaleFactor) > 0.001 {
+            self.scaleFactor = pdfView.scaleFactor
+        }
+    }
+
     func goToPage(_ index: Int) {
         guard let doc = currentPDFView?.document,
               index >= 0 && index < doc.pageCount,
               let targetPage = doc.page(at: index) else { return }
         currentPDFView?.go(to: targetPage)
         self.currentPageIndex = index
+    }
+
+    func zoomIn() {
+        guard let pdfView = currentPDFView else { return }
+        pdfView.autoScales = false
+        pdfView.zoomIn(nil)
+        self.scaleFactor = pdfView.scaleFactor
+    }
+
+    func zoomOut() {
+        guard let pdfView = currentPDFView else { return }
+        pdfView.autoScales = false
+        pdfView.zoomOut(nil)
+        self.scaleFactor = pdfView.scaleFactor
+    }
+
+    func resetZoom() {
+        guard let pdfView = currentPDFView else { return }
+        pdfView.autoScales = false
+        pdfView.scaleFactor = 1.0
+        self.scaleFactor = 1.0
+    }
+
+    func fitToWidth() {
+        guard let pdfView = currentPDFView, let page = pdfView.currentPage else { return }
+        pdfView.autoScales = false
+        let pageBounds = page.bounds(for: pdfView.displayBox)
+        let availableWidth = max(pdfView.bounds.width - 40, 100)
+        if pageBounds.width > 0 {
+            let targetScale = availableWidth / pageBounds.width
+            let clamped = max(pdfView.minScaleFactor, min(pdfView.maxScaleFactor, targetScale))
+            pdfView.scaleFactor = clamped
+            self.scaleFactor = clamped
+        }
+    }
+
+    func fitToHeight() {
+        guard let pdfView = currentPDFView, let page = pdfView.currentPage else { return }
+        pdfView.autoScales = false
+        let pageBounds = page.bounds(for: pdfView.displayBox)
+        let availableHeight = max(pdfView.bounds.height - 40, 100)
+        if pageBounds.height > 0 {
+            let targetScale = availableHeight / pageBounds.height
+            let clamped = max(pdfView.minScaleFactor, min(pdfView.maxScaleFactor, targetScale))
+            pdfView.scaleFactor = clamped
+            self.scaleFactor = clamped
+        }
     }
 }
 
@@ -519,7 +636,7 @@ struct PDFKitRepresentable: NSViewRepresentable {
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
         pdfView.displaysPageBreaks = true
-        pdfView.backgroundColor = NSColor.windowBackgroundColor
+        pdfView.backgroundColor = NSColor(calibratedWhite: 0.18, alpha: 1.0)
         pdfView.enableDataDetectors = false // Prevents E5 TextRecognition errors & stall
 
         loadDocument(into: pdfView)
@@ -555,104 +672,276 @@ struct PDFKitRepresentable: NSViewRepresentable {
     }
 }
 
-// MARK: - PDF Right Navigation Rail
+// MARK: - PDF Zoom & Fit Control Bar
 
-struct PDFRightNavigationRail: View {
+struct PDFZoomControlBar: View {
     @ObservedObject var coordinator: PDFPreviewCoordinator
 
-    private var progress: Double {
-        guard coordinator.pageCount > 1 else { return 1.0 }
-        return Double(coordinator.currentPageIndex) / Double(coordinator.pageCount - 1)
+    var body: some View {
+        HStack(spacing: 6) {
+            dividerLine
+
+            // Zoom Out (-)
+            Button {
+                coordinator.zoomOut()
+            } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("축소 (Zoom Out)")
+
+            // Percentage Display
+            Text("\(Int(round(coordinator.scaleFactor * 100)))%")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .frame(minWidth: 40)
+                .padding(.vertical, 2)
+                .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 3))
+                .help("100%로 재설정")
+                .onTapGesture {
+                    coordinator.resetZoom()
+                }
+
+            // Zoom In (+)
+            Button {
+                coordinator.zoomIn()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("확대 (Zoom In)")
+
+            dividerLine
+
+            // Fit to Width (가로맞춤)
+            Button {
+                coordinator.fitToWidth()
+            } label: {
+                fitWidthIcon
+                    .frame(width: 24, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("가로 맞춤")
+
+            // Fit to Height (세로맞춤)
+            Button {
+                coordinator.fitToHeight()
+            } label: {
+                fitHeightIcon
+                    .frame(width: 24, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("세로 맞춤")
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(
+            Color(red: 0.17, green: 0.17, blue: 0.18).opacity(0.95),
+            in: RoundedRectangle(cornerRadius: 6)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.white.opacity(0.12), lineWidth: 0.8)
+        )
     }
 
-    var body: some View {
-        VStack(spacing: 8) {
-            // Page badge (e.g. 3 / 12)
-            VStack(spacing: 1) {
-                Text("\(coordinator.currentPageIndex + 1)")
-                    .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .foregroundColor(.primary)
-                Text("/ \(coordinator.pageCount)")
-                    .font(.system(size: 9, weight: .medium, design: .rounded))
-                    .foregroundColor(.secondary)
+    private var dividerLine: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.25))
+            .frame(width: 1, height: 13)
+    }
+
+    /// 이미지와 동일한 가로맞춤 아이콘 (둥근 직사각형 안에 좌우 화살표)
+    private var fitWidthIcon: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 2.5)
+                .stroke(Color.white.opacity(0.85), lineWidth: 1.3)
+                .frame(width: 17, height: 12)
+
+            HStack(spacing: 3) {
+                Image(systemName: "arrowtriangle.backward.fill")
+                    .font(.system(size: 4))
+                Image(systemName: "arrowtriangle.forward.fill")
+                    .font(.system(size: 4))
             }
-            .padding(.vertical, 4)
-            .padding(.horizontal, 5)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
-            .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
+            .foregroundStyle(.white.opacity(0.9))
+        }
+    }
 
-            // Vertical navigation track
-            GeometryReader { geo in
-                let trackHeight = geo.size.height
-                ZStack(alignment: .top) {
-                    // Clickable track background
-                    Capsule()
-                        .fill(Color.primary.opacity(0.1))
-                        .frame(width: 6)
-                        .frame(maxWidth: .infinity)
+    /// 세로맞춤 아이콘 (둥근 직사각형 안에 상하 화살표)
+    private var fitHeightIcon: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 2.5)
+                .stroke(Color.white.opacity(0.85), lineWidth: 1.3)
+                .frame(width: 12, height: 17)
 
-                    // Progress fill down to current page
-                    Capsule()
-                        .fill(Color.accentColor)
-                        .frame(width: 6, height: max(trackHeight * CGFloat(progress), 6))
-                        .frame(maxWidth: .infinity, alignment: .top)
+            VStack(spacing: 3) {
+                Image(systemName: "arrowtriangle.up.fill")
+                    .font(.system(size: 4))
+                Image(systemName: "arrowtriangle.down.fill")
+                    .font(.system(size: 4))
+            }
+            .foregroundStyle(.white.opacity(0.9))
+        }
+    }
+}
 
-                    // Current page thumb handle
-                    Circle()
-                        .fill(Color.white)
-                        .shadow(color: .black.opacity(0.3), radius: 3, y: 1)
-                        .overlay(
-                            Circle()
-                                .stroke(Color.accentColor, lineWidth: 1.5)
-                        )
-                        .frame(width: 14, height: 14)
-                        .offset(y: max(0, min(trackHeight - 14, (trackHeight - 14) * CGFloat(progress))))
-                        .frame(maxWidth: .infinity)
+// MARK: - PDF Thumbnail Cache
 
-                    // Page tick marks if manageable page count
-                    if coordinator.pageCount > 1 && coordinator.pageCount <= 30 {
-                        ForEach(0..<coordinator.pageCount, id: \.self) { idx in
-                            let y = (trackHeight - 14) * (CGFloat(idx) / CGFloat(coordinator.pageCount - 1)) + 7
-                            Circle()
-                                .fill(idx == coordinator.currentPageIndex ? Color.accentColor : Color.primary.opacity(0.3))
-                                .frame(width: idx == coordinator.currentPageIndex ? 4 : 2, height: idx == coordinator.currentPageIndex ? 4 : 2)
-                                .offset(y: y - (idx == coordinator.currentPageIndex ? 2 : 1))
-                                .frame(maxWidth: .infinity)
+@MainActor
+final class PDFThumbnailCache {
+    static let shared = PDFThumbnailCache()
+    private let cache = NSCache<NSString, NSImage>()
+
+    init() {
+        cache.countLimit = 300
+    }
+
+    func thumbnail(for doc: PDFDocument, index: Int) -> NSImage? {
+        let key = "\(doc.hash)_p\(index)" as NSString
+        return cache.object(forKey: key)
+    }
+
+    func setThumbnail(_ image: NSImage, for doc: PDFDocument, index: Int) {
+        let key = "\(doc.hash)_p\(index)" as NSString
+        cache.setObject(image, forKey: key)
+    }
+}
+
+// MARK: - PDF Thumbnail Sidebar View
+
+struct PDFThumbnailSidebarView: View {
+    @ObservedObject var coordinator: PDFPreviewCoordinator
+    var onToggleSidebar: (() -> Void)?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Top Header: ≡ + current page number
+            HStack(spacing: 14) {
+                Button {
+                    onToggleSidebar?()
+                } label: {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Toggle thumbnails")
+
+                Text("\(coordinator.currentPageIndex + 1)")
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 42)
+            .background(Color(red: 0.18, green: 0.18, blue: 0.19))
+
+            // Thumbnails List
+            ScrollViewReader { proxy in
+                ScrollView(.vertical, showsIndicators: true) {
+                    LazyVStack(spacing: 20) {
+                        if let doc = coordinator.document {
+                            ForEach(0..<coordinator.pageCount, id: \.self) { index in
+                                PDFThumbnailItemView(
+                                    document: doc,
+                                    pageIndex: index,
+                                    isSelected: index == coordinator.currentPageIndex,
+                                    onSelect: {
+                                        coordinator.goToPage(index)
+                                    }
+                                )
+                                .id(index)
+                            }
                         }
                     }
+                    .padding(.vertical, 16)
+                    .padding(.horizontal, 12)
                 }
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            guard trackHeight > 0 else { return }
-                            let clampedY = max(0, min(value.location.y, trackHeight))
-                            let fraction = clampedY / trackHeight
-                            let targetPage = Int(round(fraction * Double(coordinator.pageCount - 1)))
-                            coordinator.goToPage(targetPage)
-                        }
-                )
+                .background(Color(red: 0.14, green: 0.14, blue: 0.15))
+                .onChange(of: coordinator.currentPageIndex) { newIndex in
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        proxy.scrollTo(newIndex, anchor: .center)
+                    }
+                }
             }
-            .padding(.vertical, 4)
-
-            // Progress percentage
-            Text("\(Int(round(progress * 100)))%")
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundColor(.secondary)
         }
-        .frame(width: 44)
-        .padding(.vertical, 10)
-        .padding(.horizontal, 3)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - PDF Thumbnail Item View
+
+struct PDFThumbnailItemView: View {
+    let document: PDFDocument
+    let pageIndex: Int
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    @State private var thumbnail: NSImage?
+
+    var body: some View {
+        Button(action: onSelect) {
+            VStack(spacing: 8) {
+                // Page thumbnail container
+                ZStack {
+                    if let thumbnail = thumbnail {
+                        Image(nsImage: thumbnail)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .background(Color.white)
+                    } else {
+                        Rectangle()
+                            .fill(Color.white)
+                            .aspectRatio(1 / 1.414, contentMode: .fit)
+                    }
+                }
+                .frame(width: 82)
+                .padding(isSelected ? 6 : 0)
+                .background(
+                    isSelected
+                        ? Color(red: 0.44, green: 0.65, blue: 0.98)
+                        : Color.clear
                 )
-                .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
-        )
-        .padding(.trailing, 12)
-        .padding(.vertical, 12)
+
+                // Page Number
+                Text("\(pageIndex + 1)")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+            }
+        }
+        .buttonStyle(.plain)
+        .task(id: pageIndex) {
+            loadThumbnail()
+        }
+    }
+
+    private func loadThumbnail() {
+        if let cached = PDFThumbnailCache.shared.thumbnail(for: document, index: pageIndex) {
+            self.thumbnail = cached
+            return
+        }
+        guard let page = document.page(at: pageIndex) else { return }
+        let targetSize = CGSize(width: 164, height: 232)
+        Task.detached(priority: .userInitiated) {
+            let img = page.thumbnail(of: targetSize, for: .mediaBox)
+            await MainActor.run {
+                PDFThumbnailCache.shared.setThumbnail(img, for: document, index: pageIndex)
+                self.thumbnail = img
+            }
+        }
     }
 }

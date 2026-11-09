@@ -26,6 +26,7 @@ struct ContentView: View {
     @StateObject private var filePreviewManager = FilePreviewManager()
     @StateObject private var thumbnailProvider = ThumbnailProvider()
     @StateObject private var sidebarManager = SidebarManager()
+    @StateObject private var mouseNavCoordinator = MouseNavigationCoordinator()
 
     @State private var files: [UnifiedFile] = []
     @State private var currentPath = "/sdcard"
@@ -133,38 +134,40 @@ struct ContentView: View {
             result = result.filter { $0.name.localizedCaseInsensitiveContains(searchQuery) }
         }
         
-        // Apply sort
+        // Apply sort: 폴더는 항상 위, 파일은 아래로 종류를 묶어서 정렬
         let ascending = sortAscending
         let sizes = folderSizes
-        switch sortOption {
-        case .name:
-            result.sort {
-                let cmp = $0.name.localizedCaseInsensitiveCompare($1.name)
-                return ascending ? cmp == .orderedAscending : cmp == .orderedDescending
+        result.sort { lhs, rhs in
+            if lhs.isDirectory != rhs.isDirectory {
+                return lhs.isDirectory
             }
-        case .size:
-            result.sort {
-                let lhsSize = $0.isDirectory ? (sizes[$0.path] ?? $0.size) : $0.size
-                let rhsSize = $1.isDirectory ? (sizes[$1.path] ?? $1.size) : $1.size
+
+            switch sortOption {
+            case .name:
+                let cmp = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+                return ascending ? cmp == .orderedAscending : cmp == .orderedDescending
+            case .size:
+                let lhsSize = lhs.isDirectory ? (sizes[lhs.path] ?? lhs.size) : lhs.size
+                let rhsSize = rhs.isDirectory ? (sizes[rhs.path] ?? rhs.size) : rhs.size
                 if lhsSize != rhsSize {
                     return ascending ? lhsSize < rhsSize : lhsSize > rhsSize
                 }
-                let cmp = $0.name.localizedCaseInsensitiveCompare($1.name)
+                let cmp = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
                 return ascending ? cmp == .orderedAscending : cmp == .orderedDescending
-            }
-        case .type:
-            result.sort {
-                let t0 = $0.sortableType
-                let t1 = $1.sortableType
+            case .type:
+                let t0 = lhs.sortableType
+                let t1 = rhs.sortableType
                 if t0 != t1 { return ascending ? t0 < t1 : t0 > t1 }
-                let cmp = $0.name.localizedCaseInsensitiveCompare($1.name)
+                let cmp = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
                 return ascending ? cmp == .orderedAscending : cmp == .orderedDescending
-            }
-        case .date:
-            result.sort {
-                let d0 = $0.modificationDate ?? Date.distantPast
-                let d1 = $1.modificationDate ?? Date.distantPast
-                return ascending ? d0 < d1 : d0 > d1
+            case .date:
+                let d0 = lhs.modificationDate ?? Date.distantPast
+                let d1 = rhs.modificationDate ?? Date.distantPast
+                if d0 != d1 {
+                    return ascending ? d0 < d1 : d0 > d1
+                }
+                let cmp = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+                return ascending ? cmp == .orderedAscending : cmp == .orderedDescending
             }
         }
         
@@ -881,6 +884,17 @@ struct ContentView: View {
             appManager.operationEngine.deviceManager = deviceManager
             appManager.operationEngine.uploadManager = uploadManager
             appManager.operationEngine.downloadManager = downloadManager
+
+            mouseNavCoordinator.onBack = { [self] in
+                handleMouseBackButton()
+            }
+            mouseNavCoordinator.onForward = { [self] in
+                handleMouseForwardButton()
+            }
+            mouseNavCoordinator.start()
+        }
+        .onDisappear {
+            mouseNavCoordinator.stop()
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             var fileURLs: [URL] = []
@@ -1389,10 +1403,14 @@ struct ContentView: View {
         guard activeAppFilter == nil else { return }
         guard selectedFiles.count == 1,
               let fileId = selectedFiles.first,
-              let file = files.first(where: { $0.id == fileId }),
-              !file.isDirectory,
-              FilePreviewManager.isPreviewable(file) else { return }
+              let file = files.first(where: { $0.id == fileId }) else { return }
         
+        if file.isDirectory {
+            navigateTo(file.path)
+            return
+        }
+        
+        guard FilePreviewManager.isPreviewable(file) else { return }
         filePreviewManager.previewFile(file)
     }
     
@@ -1837,6 +1855,27 @@ struct ContentView: View {
             loadTask = Task.detached(priority: .userInitiated) {
                 await self.loadFiles()
             }
+        }
+    }
+
+    private func handleMouseBackButton() {
+        if filePreviewManager.showPreviewPanel {
+            filePreviewManager.dismissPreview()
+        }
+        if showTrashView {
+            showTrashView = false
+            return
+        }
+        if activeAppFilter != nil {
+            activeAppFilter = nil
+            return
+        }
+        navigateBack()
+    }
+
+    private func handleMouseForwardButton() {
+        if !filePreviewManager.showPreviewPanel && !showTrashView && activeAppFilter == nil {
+            navigateForward()
         }
     }
     
@@ -2388,3 +2427,46 @@ struct IndeterminateProgressModifier: ViewModifier, Animatable {
             }
     }
 }
+
+// MARK: - Mouse Navigation Coordinator (Back/Forward Side Buttons)
+
+@MainActor
+final class MouseNavigationCoordinator: ObservableObject {
+    private var monitor: Any?
+    var onBack: (() -> Void)?
+    var onForward: (() -> Void)?
+
+    func start() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseDown]) { [weak self] event in
+            // Button 3: Standard Mouse Back button
+            if event.buttonNumber == 3 {
+                Task { @MainActor [weak self] in
+                    self?.onBack?()
+                }
+                return nil
+            } else if event.buttonNumber == 4 {
+                // Button 4: Standard Mouse Forward button
+                Task { @MainActor [weak self] in
+                    self?.onForward?()
+                }
+                return nil
+            }
+            return event
+        }
+    }
+
+    func stop() {
+        if let m = monitor {
+            NSEvent.removeMonitor(m)
+            monitor = nil
+        }
+    }
+
+    deinit {
+        if let m = monitor {
+            NSEvent.removeMonitor(m)
+        }
+    }
+}
+

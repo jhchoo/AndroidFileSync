@@ -770,6 +770,16 @@ struct FileBrowserView: View {
         else { onDownload(file) }
     }
 
+    private func handleSpaceAction() {
+        guard let singleId = selectedFiles.count == 1 ? selectedFiles.first : nil,
+              let file = files.first(where: { $0.id == singleId }) else { return }
+        if file.isDirectory {
+            onNavigate(file.path)
+        } else if FilePreviewManager.isPreviewable(file) {
+            onPreview?(file)
+        }
+    }
+
     private func handleRenameSelection() {
         guard let onRename = onRename else { return }
         let selected = files.filter { selectedFiles.contains($0.id) }
@@ -808,6 +818,7 @@ struct FileBrowserView: View {
         }), selectedIndexes: Set(files.indices.filter { selection.contains(files[$0].id) }),
             isEnabled: isInteractionEnabled, onClick: handleClick, onOpen: handleOpen,
             onRename: handleRenameSelection,
+            onSpace: handleSpaceAction,
             onDrag: handleMarquee, onMarqueeChange: { marqueeRectangle = $0 })
     }
 

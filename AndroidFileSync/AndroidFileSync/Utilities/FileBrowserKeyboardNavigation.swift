@@ -11,6 +11,7 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
     var onClick: ((Int?, NSEvent.ModifierFlags) -> Void)? = nil
     var onOpen: ((Int) -> Void)? = nil
     var onRename: (() -> Void)? = nil
+    var onSpace: (() -> Void)? = nil
     var onDrag: ((Set<Int>, Int?, Int?) -> Void)? = nil
     var onMarqueeChange: ((CGRect?) -> Void)? = nil
 
@@ -29,6 +30,7 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
         view.onClick = onClick
         view.onOpen = onOpen
         view.onRename = onRename
+        view.onSpace = onSpace
         view.onDrag = onDrag
         view.onMarqueeChange = onMarqueeChange
     }
@@ -46,6 +48,7 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
         var onClick: ((Int?, NSEvent.ModifierFlags) -> Void)?
         var onOpen: ((Int) -> Void)?
         var onRename: (() -> Void)?
+        var onSpace: (() -> Void)?
         var onDrag: ((Set<Int>, Int?, Int?) -> Void)?
         var onMarqueeChange: ((CGRect?) -> Void)?
         private var monitor: Any?
@@ -173,6 +176,14 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
             if event.keyCode == 36 || event.keyCode == 76 {
                 if let onRename {
                     onRename()
+                    return nil
+                }
+            }
+
+            // Space key (49) -> Open folder or preview file
+            if event.keyCode == 49 {
+                if let onSpace {
+                    onSpace()
                     return nil
                 }
             }
