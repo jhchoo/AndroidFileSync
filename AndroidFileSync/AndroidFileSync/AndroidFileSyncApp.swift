@@ -11,7 +11,7 @@ extension Notification.Name {
     static let afsDownloadBatchStateChanged = Notification.Name("afsDownloadBatchStateChanged")
     static let afsUploadBatchStateChanged = Notification.Name("afsUploadBatchStateChanged")
     static let afsDeletionsChanged = Notification.Name("afsDeletionsChanged")
-}
+} 
 
 @main
 struct AndroidFileSyncApp: App {
