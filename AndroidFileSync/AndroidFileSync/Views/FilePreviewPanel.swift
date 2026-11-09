@@ -9,11 +9,14 @@
 
 import SwiftUI
 import AVKit
+import PDFKit
+internal import Combine
 
 // MARK: - Preview Panel
 
 struct FilePreviewPanel: View {
     @ObservedObject var previewManager: FilePreviewManager
+    @StateObject private var pdfCoordinator = PDFPreviewCoordinator()
     
     @State private var appeared = false
     @State private var imageScale: CGFloat = 1.0
@@ -28,13 +31,14 @@ struct FilePreviewPanel: View {
                 .accessibilityAddTraits(.isButton)
                 .accessibilityLabel("Close preview")
             
-            // Floating panel
+            // Full content area panel
             panelContent
-                .frame(maxWidth: 820, maxHeight: 620)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 12))
-                .shadow(color: .black.opacity(0.35), radius: 40, y: 12)
+                .shadow(color: .black.opacity(0.35), radius: 30, y: 10)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
-                .scaleEffect(appeared ? 1.0 : 0.88)
+                .padding(20)
+                .scaleEffect(appeared ? 1.0 : 0.94)
                 .opacity(appeared ? 1 : 0)
         }
         .onAppear {
@@ -118,6 +122,7 @@ struct FilePreviewPanel: View {
         case .image: return .blue
         case .video: return .purple
         case .audio: return .pink
+        case .pdf: return .red
         case .document: return .orange
         case .unknown: return .gray
         }
@@ -136,6 +141,8 @@ struct FilePreviewPanel: View {
             videoThumbnailPreview(nsImage)
         case .videoReady(let url):
             inlineVideoPlayer(url: url)
+        case .pdfReady(let url):
+            pdfPreview(url: url)
         case .audioIcon:
             audioPreview
         case .documentIcon(let ext):
@@ -149,8 +156,7 @@ struct FilePreviewPanel: View {
     
     private var loadingView: some View {
         VStack(spacing: 16) {
-            ProgressView()
-                .controlSize(.large)
+            LoadingSpinner(size: 28)
             
             Text("Loading preview…")
                 .font(.system(size: 13))
@@ -280,6 +286,21 @@ struct FilePreviewPanel: View {
             .background(Color.black)
             .transition(.opacity)
     }
+
+    // MARK: - PDF Preview
+
+    private func pdfPreview(url: URL) -> some View {
+        ZStack(alignment: .trailing) {
+            PDFKitRepresentable(url: url, coordinator: pdfCoordinator)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(NSColor.windowBackgroundColor))
+
+            PDFRightNavigationRail(coordinator: pdfCoordinator)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .transition(.opacity)
+        .accessibilityLabel("PDF Document Preview")
+    }
     
     // MARK: - Audio Preview
     
@@ -397,8 +418,7 @@ struct FilePreviewPanel: View {
             // Full pull progress indicator
             if previewManager.isLoadingFullFile {
                 HStack(spacing: 6) {
-                    ProgressView()
-                        .controlSize(.small)
+                    LoadingSpinner(size: 13)
                     Text(previewManager.fullFilePullProgress)
                         .font(.system(size: 11, design: .rounded))
                         .foregroundStyle(.secondary)
@@ -432,5 +452,207 @@ struct FilePreviewPanel: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             previewManager.dismissPreview()
         }
+    }
+}
+
+// MARK: - PDF Coordinator
+
+@MainActor
+final class PDFPreviewCoordinator: ObservableObject {
+    @Published var pageCount: Int = 1
+    @Published var currentPageIndex: Int = 0
+    private weak var currentPDFView: PDFView?
+
+    func attach(pdfView: PDFView) {
+        self.currentPDFView = pdfView
+        updatePages()
+
+        NotificationCenter.default.removeObserver(self, name: .PDFViewPageChanged, object: nil)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePageChanged(_:)),
+            name: .PDFViewPageChanged,
+            object: pdfView
+        )
+    }
+
+    func updatePages() {
+        guard let doc = currentPDFView?.document else { return }
+        self.pageCount = max(doc.pageCount, 1)
+        if let current = currentPDFView?.currentPage {
+            let idx = doc.index(for: current)
+            if idx >= 0 && idx < doc.pageCount {
+                self.currentPageIndex = idx
+            }
+        }
+    }
+
+    @objc private func handlePageChanged(_ note: Notification) {
+        guard let doc = currentPDFView?.document, let current = currentPDFView?.currentPage else { return }
+        let idx = doc.index(for: current)
+        if idx >= 0 && idx < doc.pageCount && self.currentPageIndex != idx {
+            self.currentPageIndex = idx
+        }
+        if self.pageCount != doc.pageCount {
+            self.pageCount = max(doc.pageCount, 1)
+        }
+    }
+
+    func goToPage(_ index: Int) {
+        guard let doc = currentPDFView?.document,
+              index >= 0 && index < doc.pageCount,
+              let targetPage = doc.page(at: index) else { return }
+        currentPDFView?.go(to: targetPage)
+        self.currentPageIndex = index
+    }
+}
+
+// MARK: - Native PDFKit View
+
+struct PDFKitRepresentable: NSViewRepresentable {
+    let url: URL
+    let coordinator: PDFPreviewCoordinator
+
+    func makeNSView(context: Context) -> PDFView {
+        let pdfView = PDFView()
+        pdfView.autoresizingMask = [.width, .height]
+        pdfView.displayMode = .singlePageContinuous
+        pdfView.displayDirection = .vertical
+        pdfView.displaysPageBreaks = true
+        pdfView.backgroundColor = NSColor.windowBackgroundColor
+        pdfView.enableDataDetectors = false // Prevents E5 TextRecognition errors & stall
+
+        loadDocument(into: pdfView)
+        coordinator.attach(pdfView: pdfView)
+
+        DispatchQueue.main.async {
+            pdfView.layoutDocumentView()
+            pdfView.autoScales = true
+            coordinator.updatePages()
+        }
+
+        return pdfView
+    }
+
+    func updateNSView(_ pdfView: PDFView, context: Context) {
+        if pdfView.document?.documentURL != url {
+            loadDocument(into: pdfView)
+            coordinator.attach(pdfView: pdfView)
+            DispatchQueue.main.async {
+                pdfView.layoutDocumentView()
+                pdfView.autoScales = true
+                coordinator.updatePages()
+            }
+        }
+    }
+
+    private func loadDocument(into pdfView: PDFView) {
+        if let doc = PDFDocument(url: url) {
+            pdfView.document = doc
+        } else if let data = try? Data(contentsOf: url), let doc = PDFDocument(data: data) {
+            pdfView.document = doc
+        }
+    }
+}
+
+// MARK: - PDF Right Navigation Rail
+
+struct PDFRightNavigationRail: View {
+    @ObservedObject var coordinator: PDFPreviewCoordinator
+
+    private var progress: Double {
+        guard coordinator.pageCount > 1 else { return 1.0 }
+        return Double(coordinator.currentPageIndex) / Double(coordinator.pageCount - 1)
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            // Page badge (e.g. 3 / 12)
+            VStack(spacing: 1) {
+                Text("\(coordinator.currentPageIndex + 1)")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundColor(.primary)
+                Text("/ \(coordinator.pageCount)")
+                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 5)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+            .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
+
+            // Vertical navigation track
+            GeometryReader { geo in
+                let trackHeight = geo.size.height
+                ZStack(alignment: .top) {
+                    // Clickable track background
+                    Capsule()
+                        .fill(Color.primary.opacity(0.1))
+                        .frame(width: 6)
+                        .frame(maxWidth: .infinity)
+
+                    // Progress fill down to current page
+                    Capsule()
+                        .fill(Color.accentColor)
+                        .frame(width: 6, height: max(trackHeight * CGFloat(progress), 6))
+                        .frame(maxWidth: .infinity, alignment: .top)
+
+                    // Current page thumb handle
+                    Circle()
+                        .fill(Color.white)
+                        .shadow(color: .black.opacity(0.3), radius: 3, y: 1)
+                        .overlay(
+                            Circle()
+                                .stroke(Color.accentColor, lineWidth: 1.5)
+                        )
+                        .frame(width: 14, height: 14)
+                        .offset(y: max(0, min(trackHeight - 14, (trackHeight - 14) * CGFloat(progress))))
+                        .frame(maxWidth: .infinity)
+
+                    // Page tick marks if manageable page count
+                    if coordinator.pageCount > 1 && coordinator.pageCount <= 30 {
+                        ForEach(0..<coordinator.pageCount, id: \.self) { idx in
+                            let y = (trackHeight - 14) * (CGFloat(idx) / CGFloat(coordinator.pageCount - 1)) + 7
+                            Circle()
+                                .fill(idx == coordinator.currentPageIndex ? Color.accentColor : Color.primary.opacity(0.3))
+                                .frame(width: idx == coordinator.currentPageIndex ? 4 : 2, height: idx == coordinator.currentPageIndex ? 4 : 2)
+                                .offset(y: y - (idx == coordinator.currentPageIndex ? 2 : 1))
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            guard trackHeight > 0 else { return }
+                            let clampedY = max(0, min(value.location.y, trackHeight))
+                            let fraction = clampedY / trackHeight
+                            let targetPage = Int(round(fraction * Double(coordinator.pageCount - 1)))
+                            coordinator.goToPage(targetPage)
+                        }
+                )
+            }
+            .padding(.vertical, 4)
+
+            // Progress percentage
+            Text("\(Int(round(progress * 100)))%")
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .foregroundColor(.secondary)
+        }
+        .frame(width: 44)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 3)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
+        )
+        .padding(.trailing, 12)
+        .padding(.vertical, 12)
     }
 }

@@ -1099,24 +1099,38 @@ class ADBManager {
     static func listFiles(path: String, onPageLoaded: (([ADBFile]) -> Void)? = nil) async throws -> [ADBFile] {
         let adbPath = getADBPath()
         let totalStart = Date()
-        AppLogger.log("⚙️ [listFiles] Request to list directory: \(path)")
+        let cleanPath = FileNameHelper.cleanRemotePath(path)
+        AppLogger.log("⚙️ [listFiles] Request to list directory: \(cleanPath)")
         
         let startTime = Date()
-        let listCommand = "ls -1a '\(FileNameHelper.escapeForSingleQuotedShell(path))' 2>&1"
-        AppLogger.log("⚙️ [listFiles] Executing command: ls -1a '\(path)' 2>&1")
+        let listCommand = "ls --color=never -1a '\(FileNameHelper.escapeForSingleQuotedShell(cleanPath))' 2>&1"
+        AppLogger.log("⚙️ [listFiles] Executing command: ls --color=never -1a '\(cleanPath)' 2>&1")
         
         // Shorter timeout for media paths — FUSE/Scoped Storage can block ls on Android 14+
-        let isMediaPath = path.contains("/DCIM") || path.contains("/Pictures") || path.contains("/Movies")
+        let isMediaPath = cleanPath.contains("/DCIM") || cleanPath.contains("/Pictures") || cleanPath.contains("/Movies")
         let lsTimeout: Double = isMediaPath ? 12.0 : 30.0
         if isMediaPath {
             AppLogger.log("⚙️ [listFiles] Media path detected — using \(Int(lsTimeout))s ls timeout (content:// fallback available)")
         }
         
-        let (code, output, error) = await Shell.runAsyncWithTimeout(
+        var (code, output, error) = await Shell.runAsyncWithTimeout(
             adbPath,
             args: deviceArgs(["shell", listCommand]),
             timeoutSeconds: lsTimeout
         )
+        
+        // Fallback for older Android/toybox builds that don't support --color=never
+        if code != 0 && (output.contains("invalid option") || output.contains("unrecognized option")) {
+            let legacyListCmd = "ls -1a '\(FileNameHelper.escapeForSingleQuotedShell(cleanPath))' 2>&1"
+            let (fallbackCode, fallbackOut, fallbackErr) = await Shell.runAsyncWithTimeout(
+                adbPath,
+                args: deviceArgs(["shell", legacyListCmd]),
+                timeoutSeconds: lsTimeout
+            )
+            code = fallbackCode
+            output = fallbackOut
+            error = fallbackErr
+        }
         
         let elapsed = Date().timeIntervalSince(startTime)
         AppLogger.log("⚙️ [listFiles] Command finished. Code: \(code), Elapsed: \(String(format: "%.3fs", elapsed)), Output length: \(output.count) chars, Stderr length: \(error.count) chars")
@@ -1156,7 +1170,7 @@ class ADBManager {
         
         var fileNames: [String] = []
         output.enumerateLines { name, _ in
-            let cleanName = name.trimmingCharacters(in: CharacterSet(charactersIn: "\r"))
+            let cleanName = FileNameHelper.cleanFileName(name)
             guard !cleanName.isEmpty && cleanName != "." && cleanName != ".." else { return }
             guard !cleanName.hasPrefix("ls:") && !cleanName.contains("Permission denied") && !cleanName.contains("Operation not permitted") else {
                 // Safe to log: these lines contain only directory paths, not file names
@@ -1319,7 +1333,7 @@ class ADBManager {
                 let perms = String(parts[0])
                 let size  = UInt64(parts[1]) ?? 0
                 let ts    = Double(parts[2])
-                let name  = String(parts[3]).trimmingCharacters(in: CharacterSet(charactersIn: "\r"))
+                let name  = FileNameHelper.cleanFileName(String(parts[3]))
                 guard nameSet.contains(name) else { return }
                 let isDir = perms.hasPrefix("d")
                 let modDate = ts.map { Date(timeIntervalSince1970: $0) }
@@ -2098,7 +2112,7 @@ class ADBManager {
                 let perms = String(parts[0])
                 let size  = UInt64(parts[1]) ?? 0
                 let ts    = Double(parts[2])
-                let name  = String(parts[3]).trimmingCharacters(in: CharacterSet(charactersIn: "\r"))
+                let name  = FileNameHelper.cleanFileName(String(parts[3]))
                 let isDir = perms.hasPrefix("d")
                 let modDate = ts.map { Date(timeIntervalSince1970: $0) }
                 let fullPath = path.hasSuffix("/") ? path + name : path + "/" + name
@@ -2148,7 +2162,8 @@ class ADBManager {
                         // Everything after date+time is the filename (may contain spaces)
                         let nameStartIndex = cleanLine.range(of: next, range: cleanLine.startIndex..<cleanLine.endIndex)?.upperBound
                         if let start = nameStartIndex {
-                            let name = cleanLine[start...].trimmingCharacters(in: .whitespaces)
+                            let rawName = cleanLine[start...].trimmingCharacters(in: .whitespaces)
+                            let name = FileNameHelper.cleanFileName(rawName)
                             if !name.isEmpty {
                                 linesByName[name] = cleanLine
                             }
@@ -2204,10 +2219,13 @@ class ADBManager {
     
     // MARK: - Raw-name fallback (guarantees no files are lost, but filters deleted ghosts)
     private static func fillMissing(from exactNames: [String], existing: [ADBFile], basePath: String, adbPath: String) async -> [ADBFile] {
-        let parsed = Set(existing.map { $0.name })
+        let cleanBase = FileNameHelper.cleanRemotePath(basePath)
+        let parsed = Set(existing.map { FileNameHelper.cleanFileName($0.name) })
         var result = existing
-        for name in exactNames where !parsed.contains(name) {
-            let fullPath = basePath.hasSuffix("/") ? basePath + name : basePath + "/" + name
+        for rawName in exactNames {
+            let name = FileNameHelper.cleanFileName(rawName)
+            guard !name.isEmpty, !parsed.contains(name) else { continue }
+            let fullPath = cleanBase.hasSuffix("/") ? cleanBase + name : cleanBase + "/" + name
             let escapedPath = FileNameHelper.escapeForSingleQuotedShell(fullPath)
             
             // Verify if the file actually exists. FUSE dcache or MediaStore might return 
@@ -2280,7 +2298,7 @@ class ADBManager {
                     let perms = String(parts[0])
                     let size  = UInt64(parts[1]) ?? 0
                     let ts    = Double(parts[2])
-                    let name  = String(parts[3]).trimmingCharacters(in: CharacterSet(charactersIn: "\r"))
+                    let name  = FileNameHelper.cleanFileName(String(parts[3]))
                     let isDir = perms.hasPrefix("d")
                     let modDate = ts.map { Date(timeIntervalSince1970: $0) }
                     let fullPath = path.hasSuffix("/") ? path + name : path + "/" + name
@@ -2369,6 +2387,7 @@ class ADBManager {
         devicePath: String,
         localPath: String
     ) -> AsyncThrowingStream<(UInt64, Double), Error> {
+        let cleanDevicePath = FileNameHelper.cleanRemotePath(devicePath)
         return AsyncThrowingStream { continuation in
             let adbPath = getADBPath()
             
@@ -2379,7 +2398,7 @@ class ADBManager {
                 await withTaskGroup(of: Void.self) { group in
                     // Task 1: Run the download
                     group.addTask {
-                        let (code, _, err) = await Shell.runAsync(adbPath, args: deviceArgs(["pull", "-a", devicePath, localPath]))
+                        let (code, _, err) = await Shell.runAsync(adbPath, args: deviceArgs(["pull", "-a", cleanDevicePath, localPath]))
                         exitCode = code
                         adbError = err
                     }

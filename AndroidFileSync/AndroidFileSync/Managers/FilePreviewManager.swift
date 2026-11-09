@@ -9,6 +9,7 @@
 import Foundation
 import AppKit
 import AVFoundation
+import PDFKit
 internal import Combine
 
 // MARK: - Preview Content Types
@@ -17,6 +18,7 @@ enum PreviewContent: Equatable {
     case image(NSImage)
     case videoThumbnail(NSImage)
     case videoReady(URL)         // Full video file available for inline playback
+    case pdfReady(URL)           // Full PDF file available for PDFKit viewer
     case audioIcon
     case documentIcon(String) // extension
     case loading
@@ -36,6 +38,8 @@ enum PreviewContent: Equatable {
             return a === b
         case (.videoReady(let a), .videoReady(let b)):
             return a == b
+        case (.pdfReady(let a), .pdfReady(let b)):
+            return a == b
         default:
             return false
         }
@@ -45,7 +49,7 @@ enum PreviewContent: Equatable {
 // MARK: - File Category
 
 enum PreviewFileCategory: String {
-    case image, video, audio, document, unknown
+    case image, video, audio, pdf, document, unknown
     
     init(extension ext: String) {
         switch ext.lowercased() {
@@ -55,7 +59,9 @@ enum PreviewFileCategory: String {
             self = .video
         case "mp3", "m4a", "wav", "flac", "aac", "ogg":
             self = .audio
-        case "pdf", "txt", "rtf", "html", "htm", "md", "json", "xml", "csv",
+        case "pdf":
+            self = .pdf
+        case "txt", "rtf", "html", "htm", "md", "json", "xml", "csv",
              "doc", "docx", "xls", "xlsx", "ppt", "pptx",
              "swift", "java", "py", "js", "ts", "c", "cpp", "h", "css":
             self = .document
@@ -70,6 +76,7 @@ enum PreviewFileCategory: String {
         case .image: return "photo"
         case .video: return "film"
         case .audio: return "waveform"
+        case .pdf: return "doc.richtext"
         case .document: return "doc.text"
         case .unknown: return "doc"
         }
@@ -162,12 +169,12 @@ class FilePreviewManager: ObservableObject {
         
         let category = PreviewFileCategory(extension: file.pathExtension)
         
-        // Check file cache first — cached videos play instantly on re-open
-        if category == .video,
+        // Check file cache first — cached videos and PDFs open instantly on re-open
+        if (category == .video || category == .pdf),
            let cachedURL = fileCache[file.path],
            FileManager.default.fileExists(atPath: cachedURL.path) {
             previewFile = file
-            previewContent = .videoReady(cachedURL)
+            previewContent = (category == .pdf) ? .pdfReady(cachedURL) : .videoReady(cachedURL)
             showPreviewPanel = true
             return
         }
@@ -206,6 +213,8 @@ class FilePreviewManager: ObservableObject {
                 await loadImagePreview(file)
             case .video:
                 await generateVideoThumbnail(file)
+            case .pdf:
+                await loadPDFPreview(file)
             case .audio:
                 previewContent = .audioIcon
                 isLoading = false
@@ -255,7 +264,9 @@ class FilePreviewManager: ObservableObject {
         fullFilePullProgress = "Downloading..."
         
         fullPullTask = Task {
-            let localURL = tempDir.appendingPathComponent(file.name)
+            let cleanDevicePath = FileNameHelper.cleanRemotePath(file.path)
+            let cleanFileName = FileNameHelper.cleanFileName(file.name)
+            let localURL = tempDir.appendingPathComponent(cleanFileName)
             try? FileManager.default.removeItem(at: localURL)
             
             let adbPath = ADBManager.getADBPath()
@@ -266,7 +277,7 @@ class FilePreviewManager: ObservableObject {
             
             let (code, _, error, _) = await Shell.runWithProgressCancellable(
                 adbPath,
-                args: ADBManager.deviceArgs(["pull", file.path, localURL.path]),
+                args: ADBManager.deviceArgs(["pull", cleanDevicePath, localURL.path]),
                 progressCallback: { [weak self] text in
                     self?.parseAndUpdateProgress(text)
                 },
@@ -283,6 +294,7 @@ class FilePreviewManager: ObservableObject {
             }
             
             if code == 0, FileManager.default.fileExists(atPath: localURL.path) {
+                fileCache[cleanDevicePath] = localURL
                 fileCache[file.path] = localURL
                 NSWorkspace.shared.open(localURL)
             } else {
@@ -292,6 +304,67 @@ class FilePreviewManager: ObservableObject {
     }
     
     // MARK: - Tiered Preview Methods
+
+    /// Load PDF preview by pulling the file to temp directory for PDFKit viewing.
+    private func loadPDFPreview(_ file: UnifiedFile) async {
+        let adbPath = ADBManager.getADBPath()
+        guard !adbPath.isEmpty else {
+            previewContent = .error("ADB not found")
+            isLoading = false
+            return
+        }
+
+        let cleanDevicePath = FileNameHelper.cleanRemotePath(file.path)
+        let cleanFileName = FileNameHelper.cleanFileName(file.name)
+
+        // Check cache first
+        if let cachedURL = fileCache[cleanDevicePath] ?? fileCache[file.path], FileManager.default.fileExists(atPath: cachedURL.path) {
+            isLoading = false
+            previewContent = .pdfReady(cachedURL)
+            return
+        }
+
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let localURL = tempDir.appendingPathComponent(cleanFileName)
+        try? FileManager.default.removeItem(at: localURL)
+
+        isLoadingFullFile = true
+        fullFilePullProgress = "Loading PDF..."
+
+        let (code, _, error, _) = await Shell.runWithProgressCancellable(
+            adbPath,
+            args: ADBManager.deviceArgs(["pull", cleanDevicePath, localURL.path]),
+            progressCallback: { [weak self] text in
+                self?.parseAndUpdateProgress(text)
+            },
+            cancellationCheck: { [weak self] in
+                self?.cancellationRequested ?? false
+            }
+        )
+
+        isLoadingFullFile = false
+        isLoading = false
+
+        guard !Task.isCancelled, !cancellationRequested else {
+            try? FileManager.default.removeItem(at: localURL)
+            return
+        }
+
+        if code == 0, FileManager.default.fileExists(atPath: localURL.path) {
+            let doc = PDFDocument(url: localURL) ?? (try? Data(contentsOf: localURL)).flatMap({ PDFDocument(data: $0) })
+            if doc != nil {
+                fileCache[cleanDevicePath] = localURL
+                fileCache[file.path] = localURL
+                previewContent = .pdfReady(localURL)
+            } else {
+                print("❌ Preview: Failed to parse PDF document at \(localURL.path)")
+                previewContent = .error("Failed to parse PDF document")
+            }
+        } else {
+            print("❌ Preview: Failed to pull/open PDF: code=\(code), error=\(error)")
+            previewContent = .error("Failed to load PDF: \(error.isEmpty ? "Unknown error" : error)")
+        }
+    }
     
     /// Load image preview by piping bytes via `adb exec-out cat`.
     /// No temp file needed — bytes convert directly to NSImage in memory.

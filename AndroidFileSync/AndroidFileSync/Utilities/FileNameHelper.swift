@@ -52,4 +52,47 @@ struct FileNameHelper {
         let sanitized = sanitizeFilename(filename)
         return (sanitized, sanitized != filename)
     }
+
+    // MARK: - ADB Shell Output Sanitization
+
+    // Regular expression for stripping ANSI escape sequences (colors, cursor movements, etc.)
+    private static let ansiRegex = try? NSRegularExpression(
+        pattern: #"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])"#,
+        options: []
+    )
+
+    /// Strips ANSI terminal escape codes, carriage returns, and control characters from ADB shell output.
+    static func stripANSI(_ text: String) -> String {
+        guard let regex = ansiRegex else {
+            return text.replacingOccurrences(of: "\r", with: "")
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        let stripped = regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
+        return stripped.replacingOccurrences(of: "\r", with: "")
+    }
+
+    /// Cleans a filename returned from ADB commands:
+    /// - Strips ANSI color codes and terminal escapes
+    /// - Removes \r and non-printable control characters
+    /// - Normalizes Unicode to NFC (precomposed form, prevents Hangul jamo separation)
+    /// - Trims leading/trailing whitespace
+    static func cleanFileName(_ name: String) -> String {
+        let stripped = stripANSI(name)
+        let controlChars = CharacterSet.controlCharacters
+        let filtered = stripped.unicodeScalars.filter { scalar in
+            !controlChars.contains(scalar)
+        }
+        let result = String(filtered).trimmingCharacters(in: .whitespaces)
+        return result.precomposedStringWithCanonicalMapping
+    }
+
+    /// Ensures an Android remote file path is properly formatted:
+    /// - Cleans ANSI escapes and control characters
+    /// - Ensures a leading slash "/"
+    /// - Normalizes Unicode to NFC
+    static func cleanRemotePath(_ path: String) -> String {
+        let cleaned = cleanFileName(path)
+        guard !cleaned.isEmpty else { return "/" }
+        return cleaned.hasPrefix("/") ? cleaned : "/" + cleaned
+    }
 }
