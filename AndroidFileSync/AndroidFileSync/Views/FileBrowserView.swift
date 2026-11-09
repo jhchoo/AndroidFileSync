@@ -94,6 +94,9 @@ struct FileBrowserView: View {
     // Thumbnail provider for inline file thumbnails
     var thumbnailProvider: ThumbnailProvider? = nil
     var isInteractionEnabled: Bool = true
+    var isDualPane: Bool = false
+    var onToggleDualPane: (() -> Void)? = nil
+    var isActivePane: Bool = false
     
     // View mode toggle (list vs tiles)
     @AppStorage("fileBrowserViewMode") private var viewMode: FileBrowserViewMode = .list
@@ -158,6 +161,13 @@ struct FileBrowserView: View {
                     onChangeExtension: onBatchChangeExtension,
                     onPermanentDelete: onPermanentDelete
                 )
+            }
+        }
+        .overlay(alignment: .top) {
+            if isDualPane {
+                Rectangle()
+                    .fill(isActivePane ? Color.accentColor : Color.clear)
+                    .frame(height: 2.5)
             }
         }
         .onChange(of: currentPath) { _ in
@@ -265,6 +275,21 @@ struct FileBrowserView: View {
             
             // View mode toggle — List / Tiles
             viewModeToggle
+
+            // Dual pane toggle button
+            if let onToggleDualPane = onToggleDualPane {
+                Divider().frame(height: 16).padding(.horizontal, 4)
+
+                Button(action: onToggleDualPane) {
+                    Image(systemName: isDualPane ? "square.split.2x1.fill" : "square.split.2x1")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundColor(isDualPane ? .accentColor : .secondary)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(isDualPane ? "Single pane view" : "Dual pane (2-split) view")
+            }
 
             Divider().frame(height: 16).padding(.horizontal, 4)
 
@@ -707,12 +732,20 @@ struct FileBrowserView: View {
                 }
             }
 
-            if isDraggingOver {
+            if shouldShowDropOverlay {
                 dropOverlay
             }
         }
-        // FIX 2: Use the standard .onDrop with proper URL extraction
-        .onDrop(of: [.fileURL], isTargeted: $isDraggingOver) { providers in
+        .onDrop(of: [FileDragManager.internalFileUTType, .fileURL], isTargeted: $isDraggingOver) { providers in
+            // 1. Internal Android files move (from another pane)
+            let internalFiles = FileDragManager.shared.draggedFiles
+            if !internalFiles.isEmpty {
+                guard FileDragManager.shared.canDrop(onto: currentPath) else { return false }
+                onMoveFiles?(internalFiles, currentPath)
+                return true
+            }
+
+            // 2. External Mac files upload from Finder
             Task {
                 var urls: [URL] = []
                 for provider in providers {
@@ -1433,6 +1466,15 @@ struct FileBrowserView: View {
         return "\(getFileType(for: file)) · \(formatBytes(file.size))"
     }
     
+    private var shouldShowDropOverlay: Bool {
+        guard isDraggingOver else { return false }
+        let internalFiles = FileDragManager.shared.draggedFiles
+        if !internalFiles.isEmpty {
+            return FileDragManager.shared.canDrop(onto: currentPath)
+        }
+        return true
+    }
+
     private var dropOverlay: some View {
         RoundedRectangle(cornerRadius: 12)
             .strokeBorder(Color.blue, lineWidth: 3)

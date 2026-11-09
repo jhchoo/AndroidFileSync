@@ -119,30 +119,58 @@ struct ContentView: View {
     // (not on every data refresh). Used by FileBrowserView Equatable to detect re-sorts.
     @State private var sortVersion: Int = 0
     
-    /// Recompute the displayed (filtered + sorted) file list.
-    private func updateDisplayedFiles() {
-        var result = files
-        
-        // Filter out active in-progress deletions so deleting items never linger on screen
+    // ── Dual Pane (2-Split View) Support ────────────────────────
+    @AppStorage("isDualPaneEnabled") private var isDualPaneEnabled: Bool = false
+    @State private var activePane: PaneID = .primary
+
+    enum PaneID: Hashable {
+        case primary
+        case secondary
+    }
+
+    // Secondary Pane State
+    @State private var secondaryPath: String = "/sdcard"
+    @State private var secondaryFiles: [UnifiedFile] = []
+    @State private var secondaryDisplayedFiles: [UnifiedFile] = []
+    @State private var secondarySelectedFiles: Set<String> = []
+    @State private var secondaryPathHistory: [String] = []
+    @State private var secondaryForwardHistory: [String] = []
+    @State private var secondaryIsLoading: Bool = false
+    @State private var secondaryIsLoadingMoreFiles: Bool = false
+    @State private var secondaryIsLoadingMetadata: Bool = false
+    @State private var secondaryMetadataLoadedCount: Int = 0
+    @State private var secondaryMetadataTotalCount: Int = 0
+    @State private var secondaryFileLoadError: String? = nil
+    @State private var secondaryStorageRepairAvailable: Bool = false
+    @State private var secondarySortOption: ActionToolbar.SortOption = .name
+    @State private var secondarySortAscending: Bool = true
+    @State private var secondarySortVersion: Int = 0
+    @State private var secondaryFolderSizes: [String: UInt64] = [:]
+    @State private var secondarySearchQuery: String = ""
+    @State private var secondaryLoadTask: Task<Void, Never>? = nil
+    @State private var secondaryMetadataTask: Task<Void, Never>? = nil
+
+    /// Shared sort and filter logic for both primary and secondary panes.
+    private func sortAndFilterFiles(
+        source: [UnifiedFile],
+        query: String,
+        sortOpt: ActionToolbar.SortOption,
+        ascending: Bool,
+        sizes: [String: UInt64]
+    ) -> [UnifiedFile] {
+        var result = source
         let activeDeletingPaths = Set(fileActionManager.activeDeletions.filter { !$0.isComplete }.map { $0.filePath })
         if !activeDeletingPaths.isEmpty {
             result = result.filter { !activeDeletingPaths.contains($0.path) }
         }
-        
-        // Apply search filter
-        if !searchQuery.isEmpty {
-            result = result.filter { $0.name.localizedCaseInsensitiveContains(searchQuery) }
+        if !query.isEmpty {
+            result = result.filter { $0.name.localizedCaseInsensitiveContains(query) }
         }
-        
-        // Apply sort: 폴더는 항상 위, 파일은 아래로 종류를 묶어서 정렬
-        let ascending = sortAscending
-        let sizes = folderSizes
         result.sort { lhs, rhs in
             if lhs.isDirectory != rhs.isDirectory {
                 return lhs.isDirectory
             }
-
-            switch sortOption {
+            switch sortOpt {
             case .name:
                 let cmp = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
                 return ascending ? cmp == .orderedAscending : cmp == .orderedDescending
@@ -170,10 +198,31 @@ struct ContentView: View {
                 return ascending ? cmp == .orderedAscending : cmp == .orderedDescending
             }
         }
-        
-        displayedFiles = result
-        thumbnailProvider.requestThumbnails(for: result, currentPath: currentPath)
-        print("🔄 [SORT] updateDisplayedFiles — \(result.count) files, sort: \(sortOption.rawValue) \(ascending ? "ASC" : "DESC"), ver: \(sortVersion)")
+        return result
+    }
+
+    /// Recompute the primary displayed file list.
+    private func updateDisplayedFiles() {
+        displayedFiles = sortAndFilterFiles(
+            source: files,
+            query: searchQuery,
+            sortOpt: sortOption,
+            ascending: sortAscending,
+            sizes: folderSizes
+        )
+        thumbnailProvider.requestThumbnails(for: displayedFiles, currentPath: currentPath)
+    }
+
+    /// Recompute the secondary displayed file list.
+    private func updateSecondaryDisplayedFiles() {
+        secondaryDisplayedFiles = sortAndFilterFiles(
+            source: secondaryFiles,
+            query: secondarySearchQuery,
+            sortOpt: secondarySortOption,
+            ascending: secondarySortAscending,
+            sizes: secondaryFolderSizes
+        )
+        thumbnailProvider.requestThumbnails(for: secondaryDisplayedFiles, currentPath: secondaryPath)
     }
     
     /// Called when the user changes sort (via column header or toolbar menu).
@@ -718,12 +767,27 @@ struct ContentView: View {
             // Rebuild the sorted/filtered list when data or search changes.
             .onChange(of: files) { _ in updateDisplayedFiles() }
             .onChange(of: searchQuery) { _ in updateDisplayedFiles() }
+            .onChange(of: secondaryFiles) { _ in updateSecondaryDisplayedFiles() }
+            .onChange(of: secondarySearchQuery) { _ in updateSecondaryDisplayedFiles() }
+            .onChange(of: isDualPaneEnabled) { enabled in
+                if enabled {
+                    if secondaryFiles.isEmpty {
+                        secondaryPath = currentPath
+                        Task { await loadSecondaryFiles() }
+                    }
+                }
+            }
             .onChange(of: activeAppFilter) { _ in
                 searchQuery = ""
             }
             .onChange(of: folderSizes) { _ in
                 if sortOption == .size {
                     updateDisplayedFiles()
+                }
+            }
+            .onChange(of: secondaryFolderSizes) { _ in
+                if secondarySortOption == .size {
+                    updateSecondaryDisplayedFiles()
                 }
             }
 
@@ -962,10 +1026,14 @@ struct ContentView: View {
         NavigationSplitView {
             SidebarView(
                 sidebarManager: sidebarManager,
-                currentPath: currentPath,
+                currentPath: (isDualPaneEnabled && activePane == .secondary) ? secondaryPath : currentPath,
                 onNavigate: { path in
                     activeAppFilter = nil
-                    navigateTo(path)
+                    if isDualPaneEnabled && activePane == .secondary {
+                        navigateSecondaryTo(path)
+                    } else {
+                        navigateTo(path)
+                    }
                 },
                 trashCount: fileActionManager.trashedItems.count,
                 onOpenTrash: { showTrashView = true },
@@ -986,93 +1054,17 @@ struct ContentView: View {
                     AppBrowserView(appManager: appManager, initialFilter: appFilter, deviceName: deviceManager.deviceName, searchQuery: $searchQuery)
                         .transition(.opacity)
                 } else {
-                    // ── File Browser ──────────────────────────────────────────
+                    // ── File Browser (Single Pane or 2-Split Dual Pane) ───────
                     VStack(spacing: 0) {
-                        if let fileLoadError {
-                            StorageAccessErrorView(message: fileLoadError,
-                                canRepair: storageRepairAvailable,
-                                isRepairing: deviceManager.isRepairingStorage,
-                                isLoading: isLoading,
-                                onRepair: repairStorageAccess,
-                                onRetry: retryFileAccess,
-                                onSaveDiagnostics: saveStorageDiagnostics)
+                        if isDualPaneEnabled {
+                            HSplitView {
+                                primaryFileBrowserSection
+                                    .frame(minWidth: 260)
+                                secondaryFileBrowserSection
+                                    .frame(minWidth: 260)
+                            }
                         } else {
-                        FileBrowserView(
-                            files: displayedFiles,
-                            currentPath: currentPath,
-                            isLoading: isLoading,
-                            canGoBack: !pathHistory.isEmpty,
-                            selectedFiles: $selectedFiles,
-                            onNavigate: navigateTo,
-                            onGoBack: navigateBack,
-                            onDownload: handleDownload,
-                            onUpload: { urls in handleUpload(urls: urls) },
-                            onDelete: handleDelete,
-                            onRename: handleRename,
-                            onPreview: { file in filePreviewManager.previewFile(file) },
-                            isPerformingAction: fileActionManager.isPerformingAction,
-                            currentActionText: fileActionManager.currentAction,
-                            onCancelAction: { fileActionManager.requestCancellation() },
-                            onBatchDelete: handleBatchDelete,
-                            onBatchDownload: handleBatchDownload,
-                            onBatchChangeExtension: { ext in handleBatchChangeExtension(ext) },
-                            onCopy: { files in fileActionManager.copyToClipboard(files) },
-                            onCut: { files in fileActionManager.cutToClipboard(files) },
-                            onDownloadFolder: handleFolderDownload,
-                            onAddToSidebar: { folder in
-                                sidebarManager.addItem(
-                                    name: folder.name,
-                                    path: folder.path,
-                                    icon: "folder.fill",
-                                    color: "blue"
-                                )
-                            },
-                            onPermanentDelete: handlePermanentDelete,
-                            clipboardCount: fileActionManager.clipboard.count,
-                            clipboardOperation: fileActionManager.clipboardOperation,
-                            onPaste: {
-                                Task {
-                                    do {
-                                        try await fileActionManager.paste(to: currentPath)
-                                    } catch {
-                                        AppLogger.log("❌ [onPaste] Paste failed: \(error.localizedDescription)", level: .error)
-                                        presentFileOperationError(error)
-                                    }
-                                    await loadFiles()
-                                    await deviceManager.fetchStorageInfo()
-                                }
-                            },
-                            onPasteToFolder: { targetFolder in
-                                Task {
-                                    do {
-                                        try await fileActionManager.paste(to: targetFolder)
-                                    } catch {
-                                        AppLogger.log("❌ [onPasteToFolder] Paste failed: \(error.localizedDescription)", level: .error)
-                                        presentFileOperationError(error)
-                                    }
-                                    await loadFiles()
-                                    await deviceManager.fetchStorageInfo()
-                                }
-                            },
-                            onNewFolder: handleCreateNewFolder,
-                            onClearClipboard: { fileActionManager.clearClipboard() },
-                            onMoveFiles: { files, dest in handleMoveFiles(files: files, destination: dest) },
-                            onUploadToFolder: { urls, dest in handleUpload(urls: urls, destinationPath: dest) },
-                            activeDeletions: fileActionManager.activeDeletions,
-                            onCancelDeletion: { id in fileActionManager.cancelDeletion(id: id) },
-                            onCancelAllDeletions: { fileActionManager.cancelAllDeletions() },
-                            sortOption: sortOption,
-                            sortAscending: sortAscending,
-                            sortVersion: sortVersion,
-                            onSortChange: { option, ascending in sortFiles(by: option, ascending: ascending) },
-                            folderSizes: folderSizes,
-                            isLoadingMetadata: isLoadingMetadata,
-                            metadataLoadedCount: metadataLoadedCount,
-                            metadataTotalCount: metadataTotalCount,
-                            isLoadingMoreFiles: isLoadingMoreFiles,
-                            thumbnailProvider: thumbnailProvider,
-                            isInteractionEnabled: !filePreviewManager.showPreviewPanel
-                        )
+                            primaryFileBrowserSection
                         }
                     }
                 }
@@ -1089,7 +1081,11 @@ struct ContentView: View {
                 // ── Left side: New Folder + New File ─────────────────────────
                 ToolbarItemGroup(placement: .automatic) {
                     Button {
-                        handleCreateNewFolder()
+                        if activePane == .secondary && isDualPaneEnabled {
+                            handleCreateSecondaryNewFolder()
+                        } else {
+                            handleCreateNewFolder()
+                        }
                     } label: {
                         Label("New Folder", systemImage: "folder.badge.plus")
                     }
@@ -1106,10 +1102,15 @@ struct ContentView: View {
                             initialValue: "untitled.txt",
                             confirmLabel: "Create"
                         ) {
+                            let targetPath = (activePane == .secondary && isDualPaneEnabled) ? secondaryPath : currentPath
                             Task {
                                 do {
-                                    try await fileActionManager.createFile(at: currentPath, name: name)
-                                    await loadFiles()
+                                    try await fileActionManager.createFile(at: targetPath, name: name)
+                                    if activePane == .secondary && isDualPaneEnabled {
+                                        await loadSecondaryFiles()
+                                    } else {
+                                        await loadFiles()
+                                    }
                                     await deviceManager.fetchStorageInfo()
                                 } catch { presentFileOperationError(error) }
                             }
@@ -1121,30 +1122,56 @@ struct ContentView: View {
                     .disabled(activeAppFilter != nil)
                 }
 
-                // ── Right side: Sort + Refresh + WiFi ────────────────────────
+                // ── Right side: Dual Pane + Sort + Refresh + WiFi ────────────
                 ToolbarItemGroup(placement: .primaryAction) {
+                    // 2-Split Dual Pane toggle button (우측 상단 2분할 버튼)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            toggleDualPane()
+                        }
+                    } label: {
+                        Label("Dual Pane", systemImage: isDualPaneEnabled ? "square.split.2x1.fill" : "square.split.2x1")
+                    }
+                    .help(isDualPaneEnabled ? "Single pane view" : "Dual pane (2-split) view (⌘⇧D)")
+                    .keyboardShortcut("d", modifiers: [.command, .shift])
+
                     // Sort menu (only in file browser)
                     if activeAppFilter == nil {
                         Menu {
                             ForEach(ActionToolbar.SortOption.allCases, id: \.self) { opt in
                                 Button {
-                                    sortFiles(by: opt, ascending: sortOption == opt ? !sortAscending : true)
+                                    if activePane == .secondary && isDualPaneEnabled {
+                                        secondarySortOption = opt
+                                        secondarySortAscending = (secondarySortOption == opt) ? !secondarySortAscending : true
+                                        secondarySortVersion += 1
+                                        updateSecondaryDisplayedFiles()
+                                    } else {
+                                        sortFiles(by: opt, ascending: sortOption == opt ? !sortAscending : true)
+                                    }
                                 } label: {
-                                    if sortOption == opt {
-                                        Label(opt.rawValue, systemImage: sortAscending ? "chevron.up" : "chevron.down")
+                                    let currentOpt = (activePane == .secondary && isDualPaneEnabled) ? secondarySortOption : sortOption
+                                    let currentAsc = (activePane == .secondary && isDualPaneEnabled) ? secondarySortAscending : sortAscending
+                                    if currentOpt == opt {
+                                        Label(opt.rawValue, systemImage: currentAsc ? "chevron.up" : "chevron.down")
                                     } else {
                                         Text(opt.rawValue)
                                     }
                                 }
                             }
                         } label: {
-                            Label(sortOption.rawValue, systemImage: "arrow.up.arrow.down")
+                            let currentOpt = (activePane == .secondary && isDualPaneEnabled) ? secondarySortOption : sortOption
+                            Label(currentOpt.rawValue, systemImage: "arrow.up.arrow.down")
                         }
                         .help("Sort files")
                     }
 
                     Button {
-                        Task { await loadFiles() }
+                        Task {
+                            await loadFiles()
+                            if isDualPaneEnabled {
+                                await loadSecondaryFiles()
+                            }
+                        }
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
@@ -1229,30 +1256,331 @@ struct ContentView: View {
         return "\(count) files already exist at the destination. Choose how to proceed for all of them."
     }
 
-    // MARK: - Global Actions
-    
-    private func handleGlobalCopy() {
-        let items = files.filter { selectedFiles.contains($0.id) }
-        if items.isEmpty {
-            print("⌘C: No matching files in current listing (selectedFiles=\(selectedFiles.count), files=\(files.count))")
-            return
+    // MARK: - Dual Pane Browser Sections
+
+    @ViewBuilder
+    private var primaryFileBrowserSection: some View {
+        if let fileLoadError {
+            StorageAccessErrorView(
+                message: fileLoadError,
+                canRepair: storageRepairAvailable,
+                isRepairing: deviceManager.isRepairingStorage,
+                isLoading: isLoading,
+                onRepair: repairStorageAccess,
+                onRetry: retryFileAccess,
+                onSaveDiagnostics: saveStorageDiagnostics
+            )
+        } else {
+            primaryFileBrowserView
         }
-        print("⌘C: Copying \(items.count) item(s): \(items.map(\.name))")
-        fileActionManager.copyToClipboard(items)
     }
-    
-    private func handleGlobalCut() {
-        let items = files.filter { selectedFiles.contains($0.id) }
-        if items.isEmpty {
-            print("⌘X: No matching files in current listing")
-            return
+
+    @ViewBuilder
+    private var secondaryFileBrowserSection: some View {
+        if let secondaryFileLoadError {
+            StorageAccessErrorView(
+                message: secondaryFileLoadError,
+                canRepair: secondaryStorageRepairAvailable,
+                isRepairing: deviceManager.isRepairingStorage,
+                isLoading: secondaryIsLoading,
+                onRepair: repairStorageAccess,
+                onRetry: { Task { await loadSecondaryFiles() } },
+                onSaveDiagnostics: saveStorageDiagnostics
+            )
+        } else {
+            secondaryFileBrowserView
         }
-        print("⌘X: Cutting \(items.count) item(s): \(items.map(\.name))")
-        fileActionManager.cutToClipboard(items)
     }
-    
-    private func handleCreateNewFolder() {
-        guard activeAppFilter == nil else { return }
+
+    @ViewBuilder
+    private var primaryFileBrowserView: some View {
+        FileBrowserView(
+            files: displayedFiles,
+            currentPath: currentPath,
+            isLoading: isLoading,
+            canGoBack: !pathHistory.isEmpty,
+            selectedFiles: $selectedFiles,
+            onNavigate: navigateTo,
+            onGoBack: navigateBack,
+            onDownload: handleDownload,
+            onUpload: { urls in handleUpload(urls: urls, destinationPath: currentPath) },
+            onDelete: handleDelete,
+            onRename: handleRename,
+            onPreview: { file in filePreviewManager.previewFile(file) },
+            isPerformingAction: fileActionManager.isPerformingAction,
+            currentActionText: fileActionManager.currentAction,
+            onCancelAction: { fileActionManager.requestCancellation() },
+            onBatchDelete: handleBatchDelete,
+            onBatchDownload: handleBatchDownload,
+            onBatchChangeExtension: { ext in handleBatchChangeExtension(ext) },
+            onCopy: { files in fileActionManager.copyToClipboard(files) },
+            onCut: { files in fileActionManager.cutToClipboard(files) },
+            onDownloadFolder: handleFolderDownload,
+            onAddToSidebar: { folder in
+                sidebarManager.addItem(
+                    name: folder.name,
+                    path: folder.path,
+                    icon: "folder.fill",
+                    color: "blue"
+                )
+            },
+            onPermanentDelete: handlePermanentDelete,
+            clipboardCount: fileActionManager.clipboard.count,
+            clipboardOperation: fileActionManager.clipboardOperation,
+            onPaste: {
+                Task {
+                    do {
+                        try await fileActionManager.paste(to: currentPath)
+                    } catch {
+                        AppLogger.log("❌ [onPaste] Paste failed: \(error.localizedDescription)", level: .error)
+                        presentFileOperationError(error)
+                    }
+                    await loadFiles()
+                    if isDualPaneEnabled { await loadSecondaryFiles() }
+                    await deviceManager.fetchStorageInfo()
+                }
+            },
+            onPasteToFolder: { targetFolder in
+                Task {
+                    do {
+                        try await fileActionManager.paste(to: targetFolder)
+                    } catch {
+                        AppLogger.log("❌ [onPasteToFolder] Paste failed: \(error.localizedDescription)", level: .error)
+                        presentFileOperationError(error)
+                    }
+                    await loadFiles()
+                    if isDualPaneEnabled { await loadSecondaryFiles() }
+                    await deviceManager.fetchStorageInfo()
+                }
+            },
+            onNewFolder: handleCreateNewFolder,
+            onClearClipboard: { fileActionManager.clearClipboard() },
+            onMoveFiles: { files, dest in handleMoveFiles(files: files, destination: dest) },
+            onUploadToFolder: { urls, dest in handleUpload(urls: urls, destinationPath: dest) },
+            activeDeletions: fileActionManager.activeDeletions,
+            onCancelDeletion: { id in fileActionManager.cancelDeletion(id: id) },
+            onCancelAllDeletions: { fileActionManager.cancelAllDeletions() },
+            sortOption: sortOption,
+            sortAscending: sortAscending,
+            sortVersion: sortVersion,
+            onSortChange: { option, ascending in sortFiles(by: option, ascending: ascending) },
+            folderSizes: folderSizes,
+            isLoadingMetadata: isLoadingMetadata,
+            metadataLoadedCount: metadataLoadedCount,
+            metadataTotalCount: metadataTotalCount,
+            isLoadingMoreFiles: isLoadingMoreFiles,
+            thumbnailProvider: thumbnailProvider,
+            isInteractionEnabled: !filePreviewManager.showPreviewPanel,
+            isDualPane: isDualPaneEnabled,
+            onToggleDualPane: { toggleDualPane() },
+            isActivePane: activePane == .primary
+        )
+        .onTapGesture {
+            activePane = .primary
+        }
+    }
+
+    @ViewBuilder
+    private var secondaryFileBrowserView: some View {
+        FileBrowserView(
+            files: secondaryDisplayedFiles,
+            currentPath: secondaryPath,
+            isLoading: secondaryIsLoading,
+            canGoBack: !secondaryPathHistory.isEmpty,
+            selectedFiles: $secondarySelectedFiles,
+            onNavigate: navigateSecondaryTo,
+            onGoBack: navigateSecondaryBack,
+            onDownload: handleDownload,
+            onUpload: { urls in handleUpload(urls: urls, destinationPath: secondaryPath) },
+            onDelete: handleDelete,
+            onRename: handleRename,
+            onPreview: { file in filePreviewManager.previewFile(file) },
+            isPerformingAction: fileActionManager.isPerformingAction,
+            currentActionText: fileActionManager.currentAction,
+            onCancelAction: { fileActionManager.requestCancellation() },
+            onBatchDelete: { handleSecondaryBatchDelete() },
+            onBatchDownload: { handleBatchDownload() },
+            onBatchChangeExtension: { ext in handleBatchChangeExtension(ext, inSecondary: true) },
+            onCopy: { files in fileActionManager.copyToClipboard(files) },
+            onCut: { files in fileActionManager.cutToClipboard(files) },
+            onDownloadFolder: handleFolderDownload,
+            onAddToSidebar: { folder in
+                sidebarManager.addItem(
+                    name: folder.name,
+                    path: folder.path,
+                    icon: "folder.fill",
+                    color: "blue"
+                )
+            },
+            onPermanentDelete: { handleSecondaryPermanentDelete() },
+            clipboardCount: fileActionManager.clipboard.count,
+            clipboardOperation: fileActionManager.clipboardOperation,
+            onPaste: {
+                Task {
+                    do {
+                        try await fileActionManager.paste(to: secondaryPath)
+                    } catch {
+                        AppLogger.log("❌ [onPaste] Paste failed: \(error.localizedDescription)", level: .error)
+                        presentFileOperationError(error)
+                    }
+                    await loadSecondaryFiles()
+                    await loadFiles()
+                    await deviceManager.fetchStorageInfo()
+                }
+            },
+            onPasteToFolder: { targetFolder in
+                Task {
+                    do {
+                        try await fileActionManager.paste(to: targetFolder)
+                    } catch {
+                        AppLogger.log("❌ [onPasteToFolder] Paste failed: \(error.localizedDescription)", level: .error)
+                        presentFileOperationError(error)
+                    }
+                    await loadSecondaryFiles()
+                    await loadFiles()
+                    await deviceManager.fetchStorageInfo()
+                }
+            },
+            onNewFolder: { handleCreateSecondaryNewFolder() },
+            onClearClipboard: { fileActionManager.clearClipboard() },
+            onMoveFiles: { files, dest in handleMoveFiles(files: files, destination: dest) },
+            onUploadToFolder: { urls, dest in handleUpload(urls: urls, destinationPath: dest) },
+            activeDeletions: fileActionManager.activeDeletions,
+            onCancelDeletion: { id in fileActionManager.cancelDeletion(id: id) },
+            onCancelAllDeletions: { fileActionManager.cancelAllDeletions() },
+            sortOption: secondarySortOption,
+            sortAscending: secondarySortAscending,
+            sortVersion: secondarySortVersion,
+            onSortChange: { option, ascending in
+                secondarySortOption = option
+                secondarySortAscending = ascending
+                secondarySortVersion += 1
+                updateSecondaryDisplayedFiles()
+            },
+            folderSizes: secondaryFolderSizes,
+            isLoadingMetadata: secondaryIsLoadingMetadata,
+            metadataLoadedCount: secondaryMetadataLoadedCount,
+            metadataTotalCount: secondaryMetadataTotalCount,
+            isLoadingMoreFiles: secondaryIsLoadingMoreFiles,
+            thumbnailProvider: thumbnailProvider,
+            isInteractionEnabled: !filePreviewManager.showPreviewPanel,
+            isDualPane: isDualPaneEnabled,
+            onToggleDualPane: { toggleDualPane() },
+            isActivePane: activePane == .secondary
+        )
+        .onTapGesture {
+            activePane = .secondary
+        }
+    }
+
+    // MARK: - Dual Pane Navigation & Operations
+
+    private func toggleDualPane() {
+        isDualPaneEnabled.toggle()
+        if isDualPaneEnabled {
+            if secondaryFiles.isEmpty {
+                secondaryPath = currentPath
+                Task {
+                    await loadSecondaryFiles()
+                }
+            }
+        }
+    }
+
+    private func loadSecondaryFiles() async {
+        let pathSnapshot = secondaryPath
+        let serialSnapshot = ADBManager.activeDeviceSerial
+        AppLogger.log("📂 [loadSecondaryFiles] Request to load directory: \(secondaryPath)")
+
+        secondaryMetadataTask?.cancel()
+        secondaryMetadataTask = nil
+
+        await MainActor.run {
+            secondaryIsLoading = true
+            secondaryIsLoadingMetadata = false
+            secondaryMetadataLoadedCount = 0
+            secondaryMetadataTotalCount = 0
+        }
+
+        do {
+            let newFiles = try await deviceManager.listFiles(path: pathSnapshot) { pageFiles in
+                Task { @MainActor in
+                    guard self.secondaryPath == pathSnapshot, ADBManager.activeDeviceSerial == serialSnapshot else { return }
+                    self.secondaryFiles.append(contentsOf: pageFiles)
+                    if self.secondaryIsLoading {
+                        self.secondaryIsLoading = false
+                        self.secondaryIsLoadingMoreFiles = true
+                    }
+                }
+            }
+
+            await MainActor.run {
+                guard self.secondaryPath == pathSnapshot, ADBManager.activeDeviceSerial == serialSnapshot else { return }
+                self.secondaryFiles = newFiles
+                self.secondaryFileLoadError = nil
+                self.secondaryStorageRepairAvailable = false
+                self.secondaryIsLoading = false
+                self.secondaryIsLoadingMoreFiles = false
+                self.updateSecondaryDisplayedFiles()
+            }
+        } catch {
+            await MainActor.run {
+                guard self.secondaryPath == pathSnapshot, ADBManager.activeDeviceSerial == serialSnapshot else { return }
+                self.secondaryStorageRepairAvailable = AndroidStorageAccess.isPermissionDenied(error.localizedDescription)
+                self.secondaryFileLoadError = self.secondaryStorageRepairAvailable
+                    ? AndroidStorageAccess.Failure.permissionDenied.localizedDescription
+                    : "Couldn't open this folder. Unlock your device and try again."
+                self.secondaryFiles = []
+                self.secondarySelectedFiles.removeAll()
+                self.secondaryIsLoading = false
+                self.secondaryIsLoadingMoreFiles = false
+                self.updateSecondaryDisplayedFiles()
+            }
+        }
+    }
+
+    private func navigateSecondaryTo(_ path: String) {
+        secondaryLoadTask?.cancel()
+        secondaryMetadataTask?.cancel()
+        secondaryMetadataTask = nil
+
+        secondarySelectedFiles.removeAll()
+        secondaryPathHistory.append(secondaryPath)
+        secondaryForwardHistory.removeAll()
+        secondaryPath = path
+        secondaryFileLoadError = nil
+        secondaryStorageRepairAvailable = false
+        secondaryIsLoading = true
+        secondaryIsLoadingMetadata = false
+        secondaryIsLoadingMoreFiles = false
+        secondaryFolderSizes = [:]
+
+        secondaryLoadTask = Task.detached(priority: .userInitiated) {
+            await self.loadSecondaryFiles()
+        }
+    }
+
+    private func navigateSecondaryBack() {
+        guard let previousPath = secondaryPathHistory.popLast() else { return }
+        secondaryForwardHistory.append(secondaryPath)
+
+        secondaryLoadTask?.cancel()
+        secondaryMetadataTask?.cancel()
+        secondaryMetadataTask = nil
+
+        secondarySelectedFiles.removeAll()
+        secondaryPath = previousPath
+        secondaryFileLoadError = nil
+        secondaryStorageRepairAvailable = false
+        secondaryIsLoadingMetadata = false
+        secondaryIsLoading = true
+
+        secondaryLoadTask = Task.detached(priority: .userInitiated) {
+            await self.loadSecondaryFiles()
+        }
+    }
+
+    private func handleCreateSecondaryNewFolder() {
         if let name = TextInputDialog.show(
             title: "New Folder",
             message: "Enter a name for the new folder",
@@ -1262,8 +1590,109 @@ struct ContentView: View {
         ) {
             Task {
                 do {
-                    try await fileActionManager.createFolder(at: currentPath, name: name)
-                    await loadFiles()
+                    try await fileActionManager.createFolder(at: secondaryPath, name: name)
+                    await loadSecondaryFiles()
+                    await deviceManager.fetchStorageInfo()
+                } catch {
+                    AppLogger.log("❌ [handleCreateSecondaryNewFolder] Failed to create folder '\(name)': \(error.localizedDescription)", level: .error)
+                    presentFileOperationError(error)
+                }
+            }
+        }
+    }
+
+    private func handleSecondaryBatchDelete() {
+        let filesToDelete = secondaryFiles.filter { secondarySelectedFiles.contains($0.id) }
+        guard !filesToDelete.isEmpty else { return }
+
+        let deletedIDs = Set(filesToDelete.map { $0.id })
+        secondaryFiles.removeAll { deletedIDs.contains($0.id) }
+        updateSecondaryDisplayedFiles()
+        secondarySelectedFiles.removeAll()
+
+        Task {
+            do {
+                try await fileActionManager.deleteFiles(filesToDelete)
+                ADBManager.invalidateFolderSizeCache()
+                await deviceManager.fetchStorageInfo()
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    showErrorAlert = true
+                }
+                await loadSecondaryFiles()
+            }
+        }
+    }
+
+    private func handleSecondaryPermanentDelete() {
+        let filesToDelete = secondaryFiles.filter { secondarySelectedFiles.contains($0.id) }
+        guard !filesToDelete.isEmpty else { return }
+
+        let deletedIDs = Set(filesToDelete.map { $0.id })
+        secondaryFiles.removeAll { deletedIDs.contains($0.id) }
+        updateSecondaryDisplayedFiles()
+        secondarySelectedFiles.removeAll()
+
+        Task {
+            do {
+                try await fileActionManager.deleteFiles(filesToDelete, permanent: true)
+                ADBManager.invalidateFolderSizeCache()
+                await deviceManager.fetchStorageInfo()
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    showErrorAlert = true
+                }
+                await loadSecondaryFiles()
+            }
+        }
+    }
+
+    // MARK: - Global Actions
+
+    private func handleGlobalCopy() {
+        let sourceFiles = (activePane == .secondary && isDualPaneEnabled) ? secondaryFiles : files
+        let sourceSelected = (activePane == .secondary && isDualPaneEnabled) ? secondarySelectedFiles : selectedFiles
+        let items = sourceFiles.filter { sourceSelected.contains($0.id) }
+        if items.isEmpty {
+            print("⌘C: No matching files in active listing (selectedFiles=\(sourceSelected.count), files=\(sourceFiles.count))")
+            return
+        }
+        print("⌘C: Copying \(items.count) item(s): \(items.map(\.name))")
+        fileActionManager.copyToClipboard(items)
+    }
+
+    private func handleGlobalCut() {
+        let sourceFiles = (activePane == .secondary && isDualPaneEnabled) ? secondaryFiles : files
+        let sourceSelected = (activePane == .secondary && isDualPaneEnabled) ? secondarySelectedFiles : selectedFiles
+        let items = sourceFiles.filter { sourceSelected.contains($0.id) }
+        if items.isEmpty {
+            print("⌘X: No matching files in active listing")
+            return
+        }
+        print("⌘X: Cutting \(items.count) item(s): \(items.map(\.name))")
+        fileActionManager.cutToClipboard(items)
+    }
+
+    private func handleCreateNewFolder() {
+        guard activeAppFilter == nil else { return }
+        let targetPath = (activePane == .secondary && isDualPaneEnabled) ? secondaryPath : currentPath
+        if let name = TextInputDialog.show(
+            title: "New Folder",
+            message: "Enter a name for the new folder",
+            placeholder: "Folder name",
+            initialValue: "New Folder",
+            confirmLabel: "Create"
+        ) {
+            Task {
+                do {
+                    try await fileActionManager.createFolder(at: targetPath, name: name)
+                    if activePane == .secondary && isDualPaneEnabled {
+                        await loadSecondaryFiles()
+                    } else {
+                        await loadFiles()
+                    }
                     await deviceManager.fetchStorageInfo()
                 } catch {
                     AppLogger.log("❌ [handleCreateNewFolder] Failed to create folder '\(name)': \(error.localizedDescription)", level: .error)
@@ -1274,28 +1703,30 @@ struct ContentView: View {
     }
 
     private func handleGlobalPaste() {
+        let targetPath = (activePane == .secondary && isDualPaneEnabled) ? secondaryPath : currentPath
         if !fileActionManager.clipboard.isEmpty {
             // Internal paste — sequential: paste first, then refresh once.
             Task {
                 do {
-                    try await fileActionManager.paste(to: currentPath)
+                    try await fileActionManager.paste(to: targetPath)
                 } catch {
                     AppLogger.log("❌ [handleGlobalPaste] Paste failed: \(error.localizedDescription)", level: .error)
                     presentFileOperationError(error)
                 }
                 await loadFiles()
+                if isDualPaneEnabled { await loadSecondaryFiles() }
                 await deviceManager.fetchStorageInfo()
             }
         } else {
             // Finder drag-paste: read URLs from Mac pasteboard
             guard let urls = NSPasteboard.general.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
                   !urls.isEmpty else { return }
-            handleUpload(urls: urls)
+            handleUpload(urls: urls, destinationPath: targetPath)
         }
     }
 
     // MARK: - Keyboard Shortcut Handlers
-    
+
     private func handleSelectAll() {
         guard activeAppFilter == nil else { return }
 
@@ -1306,14 +1737,22 @@ struct ContentView: View {
             return
         }
 
-        selectedFiles = Set(displayedFiles.map(\.id))
+        if activePane == .secondary && isDualPaneEnabled {
+            secondarySelectedFiles = Set(secondaryDisplayedFiles.map(\.id))
+        } else {
+            selectedFiles = Set(displayedFiles.map(\.id))
+        }
     }
 
     private func handleDeselectAll() {
         guard activeAppFilter == nil else { return }
-        selectedFiles.removeAll()
+        if activePane == .secondary && isDualPaneEnabled {
+            secondarySelectedFiles.removeAll()
+        } else {
+            selectedFiles.removeAll()
+        }
     }
-    
+
     private func handleMouseBack() {
         guard activeAppFilter == nil else { return }
         handleNavigateUp()
@@ -1321,74 +1760,98 @@ struct ContentView: View {
 
     private func handleNavigateUp() {
         guard activeAppFilter == nil else { return }
-        let root = AndroidStorageAccess.storageRoot(for: currentPath) ?? "/storage/emulated/0"
-        guard currentPath != root && currentPath != root + "/" else { return }
+        let targetPath = (activePane == .secondary && isDualPaneEnabled) ? secondaryPath : currentPath
+        let root = AndroidStorageAccess.storageRoot(for: targetPath) ?? "/storage/emulated/0"
+        guard targetPath != root && targetPath != root + "/" else { return }
 
-        // Navigate to the parent directory of currentPath
-        let parent = (currentPath as NSString).deletingLastPathComponent
-        // Don't go above root
-        guard !parent.isEmpty, parent != currentPath else { return }
-        navigateTo(parent)
+        // Navigate to the parent directory
+        let parent = (targetPath as NSString).deletingLastPathComponent
+        guard !parent.isEmpty, parent != targetPath else { return }
+        if activePane == .secondary && isDualPaneEnabled {
+            navigateSecondaryTo(parent)
+        } else {
+            navigateTo(parent)
+        }
     }
-    
+
     private func handleOpenSelected() {
         guard activeAppFilter == nil else { return }
-        // Open the first selected item (same as double-click)
-        guard let firstId = selectedFiles.first,
-              let file = files.first(where: { $0.id == firstId }) else { return }
-        
+        let isSec = (activePane == .secondary && isDualPaneEnabled)
+        let sourceFiles = isSec ? secondaryFiles : files
+        let sourceSelected = isSec ? secondarySelectedFiles : selectedFiles
+
+        guard let firstId = sourceSelected.first,
+              let file = sourceFiles.first(where: { $0.id == firstId }) else { return }
+
         if file.isDirectory {
-            navigateTo(file.path)
+            if isSec {
+                navigateSecondaryTo(file.path)
+            } else {
+                navigateTo(file.path)
+            }
         } else if FilePreviewManager.isPreviewable(file) {
             filePreviewManager.previewFile(file)
         } else {
             handleDownload(file: file)
         }
     }
-    
+
     private func handleDeleteShortcut() {
         guard activeAppFilter == nil else { return }
-        let items = files.filter { selectedFiles.contains($0.id) }
+        let sourceFiles = (activePane == .secondary && isDualPaneEnabled) ? secondaryFiles : files
+        let sourceSelected = (activePane == .secondary && isDualPaneEnabled) ? secondarySelectedFiles : selectedFiles
+        let items = sourceFiles.filter { sourceSelected.contains($0.id) }
         guard !items.isEmpty else { return }
-        
+
         // Single file (not folder) → delete immediately without confirmation
         if items.count == 1, let file = items.first, !file.isDirectory {
             handleDelete(file)
             return
         }
-        
-        // Folder or multiple items → show confirmation
+
         trashConfirmCount = items.count
         showTrashConfirmation = true
     }
-    
+
     /// Actually performs the trash operation after user confirms
     private func executeTrashShortcut() {
-        let items = files.filter { selectedFiles.contains($0.id) }
+        let isSec = (activePane == .secondary && isDualPaneEnabled)
+        let sourceFiles = isSec ? secondaryFiles : files
+        let sourceSelected = isSec ? secondarySelectedFiles : selectedFiles
+        let items = sourceFiles.filter { sourceSelected.contains($0.id) }
         guard !items.isEmpty else { return }
-        
+
         if items.count == 1 {
             handleDelete(items.first!)
         } else {
-            handleBatchDelete()
+            if isSec {
+                handleSecondaryBatchDelete()
+            } else {
+                handleBatchDelete()
+            }
         }
     }
-    
+
     private func handlePermanentDeleteShortcut() {
         guard activeAppFilter == nil else { return }
-        let items = files.filter { selectedFiles.contains($0.id) }
+        let sourceFiles = (activePane == .secondary && isDualPaneEnabled) ? secondaryFiles : files
+        let sourceSelected = (activePane == .secondary && isDualPaneEnabled) ? secondarySelectedFiles : selectedFiles
+        let items = sourceFiles.filter { sourceSelected.contains($0.id) }
         guard !items.isEmpty else { return }
         permanentDeleteCount = items.count
         showPermanentDeleteConfirmation = true
     }
-    
+
     private func handleRenameShortcut() {
         guard activeAppFilter == nil else { return }
-        // Only rename when exactly one item is selected
-        guard selectedFiles.count == 1,
-              let fileId = selectedFiles.first,
-              let file = files.first(where: { $0.id == fileId }) else { return }
-        
+        let isSec = (activePane == .secondary && isDualPaneEnabled)
+        let sourceFiles = isSec ? secondaryFiles : files
+        let sourceSelected = isSec ? secondarySelectedFiles : selectedFiles
+
+        guard sourceSelected.count == 1,
+              let fileId = sourceSelected.first,
+              let file = sourceFiles.first(where: { $0.id == fileId }) else { return }
+
         let kind = file.isDirectory ? "Folder" : "File"
         if let newName = TextInputDialog.show(
             title: "Rename \(kind)",
@@ -1400,28 +1863,40 @@ struct ContentView: View {
             handleRename(file, newName: newName)
         }
     }
-    
+
     private func handleQuickPreview() {
         guard activeAppFilter == nil else { return }
-        guard selectedFiles.count == 1,
-              let fileId = selectedFiles.first,
-              let file = files.first(where: { $0.id == fileId }) else { return }
-        
+        let isSec = (activePane == .secondary && isDualPaneEnabled)
+        let sourceFiles = isSec ? secondaryFiles : files
+        let sourceSelected = isSec ? secondarySelectedFiles : selectedFiles
+
+        guard sourceSelected.count == 1,
+              let fileId = sourceSelected.first,
+              let file = sourceFiles.first(where: { $0.id == fileId }) else { return }
+
         if file.isDirectory {
-            navigateTo(file.path)
+            if isSec {
+                navigateSecondaryTo(file.path)
+            } else {
+                navigateTo(file.path)
+            }
             return
         }
-        
+
         guard FilePreviewManager.isPreviewable(file) else { return }
         filePreviewManager.previewFile(file)
     }
-    
+
     private func handleGetInfo() {
         guard activeAppFilter == nil else { return }
-        guard selectedFiles.count == 1,
-              let fileId = selectedFiles.first,
-              let file = files.first(where: { $0.id == fileId }) else { return }
-        
+        let isSec = (activePane == .secondary && isDualPaneEnabled)
+        let sourceFiles = isSec ? secondaryFiles : files
+        let sourceSelected = isSec ? secondarySelectedFiles : selectedFiles
+
+        guard sourceSelected.count == 1,
+              let fileId = sourceSelected.first,
+              let file = sourceFiles.first(where: { $0.id == fileId }) else { return }
+
         fileInfoTask?.cancel()
         fileInfoTask = nil
 
@@ -1943,6 +2418,9 @@ struct ContentView: View {
                 presentFileOperationError(error)
             }
             await loadFiles()
+            if isDualPaneEnabled {
+                await loadSecondaryFiles()
+            }
             await deviceManager.fetchStorageInfo()
         }
     }
@@ -2129,8 +2607,11 @@ struct ContentView: View {
     
     private func handleDelete(_ file: UnifiedFile) {
         files.removeAll { $0.id == file.id }
+        secondaryFiles.removeAll { $0.id == file.id }
         updateDisplayedFiles()
+        updateSecondaryDisplayedFiles()
         selectedFiles.remove(file.id)
+        secondarySelectedFiles.remove(file.id)
         
         Task {
             do {
@@ -2143,6 +2624,9 @@ struct ContentView: View {
                     showErrorAlert = true
                 }
                 await loadFiles()
+                if isDualPaneEnabled {
+                    await loadSecondaryFiles()
+                }
             }
         }
     }
@@ -2155,6 +2639,9 @@ struct ContentView: View {
                 // Invalidate cache and refresh
                 ADBManager.invalidateFolderSizeCache()
                 await loadFiles()
+                if isDualPaneEnabled {
+                    await loadSecondaryFiles()
+                }
             } catch {
                 await MainActor.run {
                     errorMessage = error.localizedDescription
@@ -2215,7 +2702,10 @@ struct ContentView: View {
     }
     
     private func handleBatchDownload() {
-        let selectedItems = files.filter { selectedFiles.contains($0.id) }
+        let isSec = (activePane == .secondary && isDualPaneEnabled)
+        let sourceFiles = isSec ? secondaryFiles : files
+        let sourceSelected = isSec ? secondarySelectedFiles : selectedFiles
+        let selectedItems = sourceFiles.filter { sourceSelected.contains($0.id) }
         
         guard !selectedItems.isEmpty else {
             errorMessage = "No files or folders selected."
@@ -2337,8 +2827,11 @@ struct ContentView: View {
         }
     }
     
-    private func handleBatchChangeExtension(_ newExtension: String) {
-        let filesToChange = files.filter { selectedFiles.contains($0.id) && !$0.isDirectory }
+    private func handleBatchChangeExtension(_ newExtension: String, inSecondary: Bool = false) {
+        let isSec = inSecondary || (activePane == .secondary && isDualPaneEnabled)
+        let sourceFiles = isSec ? secondaryFiles : files
+        let sourceSelected = isSec ? secondarySelectedFiles : selectedFiles
+        let filesToChange = sourceFiles.filter { sourceSelected.contains($0.id) && !$0.isDirectory }
         
         guard !filesToChange.isEmpty else {
             errorMessage = "No files selected for extension change"
@@ -2371,9 +2864,17 @@ struct ContentView: View {
             }
             
             // Refresh and clear selection
-            await loadFiles()
+            if isSec {
+                await loadSecondaryFiles()
+            } else {
+                await loadFiles()
+            }
             await MainActor.run {
-                selectedFiles.removeAll()
+                if isSec {
+                    secondarySelectedFiles.removeAll()
+                } else {
+                    selectedFiles.removeAll()
+                }
                 
                 if failCount > 0 {
                     errorMessage = "Changed \(successCount) files, \(failCount) failed"
