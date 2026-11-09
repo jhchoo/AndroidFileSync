@@ -151,31 +151,66 @@ nonisolated struct Shell {
         return activeADBEnvironment
     }
     static func run(_ command: String, args: [String]) -> (Int32, String, String) {
-        let process = Process()
-        let stdout = Pipe()
-        let stderr = Pipe()
-        
-        process.executableURL = URL(fileURLWithPath: command)
-        process.arguments = args
-        process.environment = environment(for: args)
-        process.standardOutput = stdout
-        process.standardError = stderr
-        
-        do {
-            try AppProcessLifecycle.run(process)
-            defer { AppProcessLifecycle.didExit(process) }
-            process.waitUntilExit()
-        } catch {
-            return (-1, "", error.localizedDescription)
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+
+        var fileActions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&fileActions)
+
+        let devNull = open("/dev/null", O_RDONLY)
+        if devNull >= 0 {
+            posix_spawn_file_actions_adddup2(&fileActions, devNull, STDIN_FILENO)
+            posix_spawn_file_actions_addclose(&fileActions, devNull)
         }
-        
-        let outputData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let errorData = stderr.fileHandleForReading.readDataToEndOfFile()
-        
-        let output = String(data: outputData, encoding: .utf8) ?? String(data: outputData, encoding: .isoLatin1) ?? ""
-        let error = String(data: errorData, encoding: .utf8) ?? String(data: errorData, encoding: .isoLatin1) ?? ""
-        
-        return (process.terminationStatus, output, error)
+
+        let outFd = stdoutPipe.fileHandleForWriting.fileDescriptor
+        let errFd = stderrPipe.fileHandleForWriting.fileDescriptor
+        posix_spawn_file_actions_adddup2(&fileActions, outFd, STDOUT_FILENO)
+        posix_spawn_file_actions_adddup2(&fileActions, errFd, STDERR_FILENO)
+
+        var spawnAttr: posix_spawnattr_t?
+        posix_spawnattr_init(&spawnAttr)
+        posix_spawnattr_setflags(&spawnAttr, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
+
+        var cArgs = [strdup(command)]
+        for arg in args { cArgs.append(strdup(arg)) }
+        cArgs.append(nil)
+
+        let env = environment(for: args)
+        var cEnv: [UnsafeMutablePointer<CChar>?] = []
+        for (k, v) in env { cEnv.append(strdup("\(k)=\(v)")) }
+        cEnv.append(nil)
+
+        var pid: pid_t = 0
+        let spawnRes = posix_spawn(&pid, command, &fileActions, &spawnAttr, cArgs, cEnv.count > 1 ? cEnv : nil)
+        posix_spawn_file_actions_destroy(&fileActions)
+        posix_spawnattr_destroy(&spawnAttr)
+        if devNull >= 0 { close(devNull) }
+
+        stdoutPipe.fileHandleForWriting.closeFile()
+        stderrPipe.fileHandleForWriting.closeFile()
+
+        for p in cArgs { if let p { free(p) } }
+        for p in cEnv { if let p { free(p) } }
+
+        guard spawnRes == 0 else {
+            return (spawnRes, "", "posix_spawn failed: \(spawnRes)")
+        }
+
+        try? AppProcessLifecycle.registerPID(pid)
+        defer { AppProcessLifecycle.didExitPID(pid) }
+
+        let outData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+
+        var status: Int32 = 0
+        waitpid(pid, &status, 0)
+        let exitCode = (status & 0x7f) == 0 ? ((status >> 8) & 0xff) : -1
+
+        let output = String(data: outData, encoding: .utf8) ?? String(data: outData, encoding: .isoLatin1) ?? ""
+        let error = String(data: errData, encoding: .utf8) ?? String(data: errData, encoding: .isoLatin1) ?? ""
+
+        return (exitCode, output, error)
     }
     
     static func runAsync(_ command: String, args: [String]) async -> (Int32, String, String) {
@@ -310,219 +345,276 @@ nonisolated struct Shell {
     
     /// Run a command and capture raw binary Data from stdout.
     /// Used for `adb exec-out cat` and `adb exec-out head -c` which output binary data.
-    /// - Parameters:
-    ///   - command: Path to executable
-    ///   - args: Command arguments
-    ///   - maxBytes: Maximum bytes to capture (0 = unlimited). Process is killed when limit is reached.
-    ///   - cancellationCheck: Closure polled to check if the operation should be cancelled
-    /// - Returns: (exitCode, stdoutData, stderrString)
+    /// Uses posix_spawn to preserve exact UTF-8 byte sequences without macOS Process NFD normalization.
     static func runAndCaptureData(
         _ command: String,
         args: [String],
         maxBytes: Int = 0,
         cancellationCheck: @escaping () -> Bool = { false }
     ) async -> (Int32, Data, String) {
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+
+        var fileActions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&fileActions)
+
+        let devNull = open("/dev/null", O_RDONLY)
+        if devNull >= 0 {
+            posix_spawn_file_actions_adddup2(&fileActions, devNull, STDIN_FILENO)
+            posix_spawn_file_actions_addclose(&fileActions, devNull)
+        }
+
+        let outFd = stdoutPipe.fileHandleForWriting.fileDescriptor
+        let errFd = stderrPipe.fileHandleForWriting.fileDescriptor
+        posix_spawn_file_actions_adddup2(&fileActions, outFd, STDOUT_FILENO)
+        posix_spawn_file_actions_adddup2(&fileActions, errFd, STDERR_FILENO)
+
+        var spawnAttr: posix_spawnattr_t?
+        posix_spawnattr_init(&spawnAttr)
+        posix_spawnattr_setflags(&spawnAttr, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
+
+        var cArgs = [strdup(command)]
+        for arg in args { cArgs.append(strdup(arg)) }
+        cArgs.append(nil)
+
+        let env = environment(for: args)
+        var cEnv: [UnsafeMutablePointer<CChar>?] = []
+        for (k, v) in env { cEnv.append(strdup("\(k)=\(v)")) }
+        cEnv.append(nil)
+
+        var pid: pid_t = 0
+        let spawnRes = posix_spawn(&pid, command, &fileActions, &spawnAttr, cArgs, cEnv.count > 1 ? cEnv : nil)
+        posix_spawn_file_actions_destroy(&fileActions)
+        posix_spawnattr_destroy(&spawnAttr)
+        if devNull >= 0 { close(devNull) }
+
+        stdoutPipe.fileHandleForWriting.closeFile()
+        stderrPipe.fileHandleForWriting.closeFile()
+
+        for p in cArgs { if let p { free(p) } }
+        for p in cEnv { if let p { free(p) } }
+
+        guard spawnRes == 0 else {
+            return (spawnRes, Data(), "posix_spawn failed")
+        }
+
+        try? AppProcessLifecycle.registerPID(pid)
+
         return await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let process = Process()
-                let stdout = Pipe()
-                let stderr = Pipe()
-                
-                process.executableURL = URL(fileURLWithPath: command)
-                process.arguments = args
-                process.environment = environment(for: args)
-                process.standardOutput = stdout
-                process.standardError = stderr
-                
-                var outputData = Data()
-                var errorData = Data()
-                var hasResumed = false
-                let resumeLock = NSLock()
-                var hitMaxBytes = false
-                
-                let stdoutHandle = stdout.fileHandleForReading
-                let stderrHandle = stderr.fileHandleForReading
-                
-                // Read stdout binary data incrementally
-                stdoutHandle.readabilityHandler = { handle in
-                    let data = handle.availableData
-                    if data.isEmpty {
-                        handle.readabilityHandler = nil
-                        return
+            let group = DispatchGroup()
+            let lock = NSLock()
+            var stdoutData = Data()
+            var stderrData = Data()
+            var isTerminated = false
+
+            // Cancellation monitor
+            DispatchQueue.global(qos: .utility).async {
+                while true {
+                    lock.lock()
+                    let done = isTerminated
+                    lock.unlock()
+                    if done { break }
+                    if cancellationCheck() {
+                        kill(pid, SIGKILL)
+                        break
                     }
-                    resumeLock.lock()
-                    outputData.append(data)
-                    // Kill process if we've exceeded maxBytes
-                    if maxBytes > 0 && outputData.count >= maxBytes {
-                        hitMaxBytes = true
-                        resumeLock.unlock()
-                        if process.isRunning {
-                            kill(process.processIdentifier, SIGKILL)
-                        }
-                        return
-                    }
-                    resumeLock.unlock()
-                }
-                
-                // Read stderr for error messages
-                stderrHandle.readabilityHandler = { handle in
-                    let data = handle.availableData
-                    if data.isEmpty {
-                        handle.readabilityHandler = nil
-                        return
-                    }
-                    resumeLock.lock()
-                    errorData.append(data)
-                    resumeLock.unlock()
-                }
-                
-                do {
-                    try AppProcessLifecycle.run(process)
-                    defer { AppProcessLifecycle.didExit(process) }
-                    
-                    // Start cancellation monitor
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        while process.isRunning {
-                            if cancellationCheck() {
-                                let pid = process.processIdentifier
-                                kill(pid, SIGKILL)
-                                break
-                            }
-                            Thread.sleep(forTimeInterval: 0.1)
-                        }
-                    }
-                    
-                    process.waitUntilExit()
-                    
-                    // Small delay to let readability handlers flush
                     Thread.sleep(forTimeInterval: 0.05)
-                    
-                    resumeLock.lock()
-                    if !hasResumed {
-                        hasResumed = true
-                        stdoutHandle.readabilityHandler = nil
-                        stderrHandle.readabilityHandler = nil
-                        
-                        // Trim to maxBytes if needed
-                        if maxBytes > 0 && outputData.count > maxBytes {
-                            outputData = outputData.prefix(maxBytes)
-                        }
-                        
-                        let error = String(data: errorData, encoding: .utf8) ?? ""
-                        let exitCode = hitMaxBytes ? Int32(0) : process.terminationStatus
-                        
-                        resumeLock.unlock()
-                        continuation.resume(returning: (exitCode, outputData, error))
-                    } else {
-                        resumeLock.unlock()
-                    }
-                } catch {
-                    resumeLock.lock()
-                    if !hasResumed {
-                        hasResumed = true
-                        resumeLock.unlock()
-                        continuation.resume(returning: (-1, Data(), error.localizedDescription))
-                    } else {
-                        resumeLock.unlock()
+                }
+            }
+
+            // Read stdout
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                while true {
+                    let chunk = stdoutPipe.fileHandleForReading.availableData
+                    if chunk.isEmpty { break }
+                    lock.lock()
+                    stdoutData.append(chunk)
+                    let shouldStop = maxBytes > 0 && stdoutData.count >= maxBytes
+                    lock.unlock()
+                    if shouldStop {
+                        kill(pid, SIGKILL)
+                        break
                     }
                 }
+                group.leave()
+            }
+
+            // Read stderr
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                while true {
+                    let chunk = stderrPipe.fileHandleForReading.availableData
+                    if chunk.isEmpty { break }
+                    lock.lock()
+                    stderrData.append(chunk)
+                    lock.unlock()
+                }
+                group.leave()
+            }
+
+            // Wait for exit
+            DispatchQueue.global(qos: .userInitiated).async {
+                var status: Int32 = 0
+                waitpid(pid, &status, 0)
+
+                lock.lock()
+                isTerminated = true
+                lock.unlock()
+
+                AppProcessLifecycle.didExitPID(pid)
+                group.wait()
+
+                let exitCode: Int32
+                if (status & 0x7f) == 0 {
+                    exitCode = (status >> 8) & 0xff
+                } else {
+                    exitCode = -1
+                }
+
+                lock.lock()
+                if maxBytes > 0 && stdoutData.count > maxBytes {
+                    stdoutData = stdoutData.prefix(maxBytes)
+                }
+                let errStr = String(data: stderrData, encoding: .utf8) ?? ""
+                lock.unlock()
+
+                continuation.resume(returning: (exitCode, stdoutData, errStr))
             }
         }
     }
     
-    // New: Run with progress tracking and cancellation support
+    // New: Run with progress tracking and cancellation support using posix_spawn
     static func runWithProgressCancellable(
         _ command: String,
         args: [String],
         progressCallback: @escaping (String) -> Void,
         cancellationCheck: @escaping () -> Bool = { false }
     ) async -> (Int32, String, String, Process) {
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+
+        var fileActions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&fileActions)
+
+        let devNull = open("/dev/null", O_RDONLY)
+        if devNull >= 0 {
+            posix_spawn_file_actions_adddup2(&fileActions, devNull, STDIN_FILENO)
+            posix_spawn_file_actions_addclose(&fileActions, devNull)
+        }
+
+        let outFd = stdoutPipe.fileHandleForWriting.fileDescriptor
+        let errFd = stderrPipe.fileHandleForWriting.fileDescriptor
+        posix_spawn_file_actions_adddup2(&fileActions, outFd, STDOUT_FILENO)
+        posix_spawn_file_actions_adddup2(&fileActions, errFd, STDERR_FILENO)
+
+        var spawnAttr: posix_spawnattr_t?
+        posix_spawnattr_init(&spawnAttr)
+        posix_spawnattr_setflags(&spawnAttr, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
+
+        var cArgs = [strdup(command)]
+        for arg in args { cArgs.append(strdup(arg)) }
+        cArgs.append(nil)
+
+        let env = environment(for: args)
+        var cEnv: [UnsafeMutablePointer<CChar>?] = []
+        for (k, v) in env { cEnv.append(strdup("\(k)=\(v)")) }
+        cEnv.append(nil)
+
+        var pid: pid_t = 0
+        let spawnRes = posix_spawn(&pid, command, &fileActions, &spawnAttr, cArgs, cEnv.count > 1 ? cEnv : nil)
+        posix_spawn_file_actions_destroy(&fileActions)
+        posix_spawnattr_destroy(&spawnAttr)
+        if devNull >= 0 { close(devNull) }
+
+        stdoutPipe.fileHandleForWriting.closeFile()
+        stderrPipe.fileHandleForWriting.closeFile()
+
+        for p in cArgs { if let p { free(p) } }
+        for p in cEnv { if let p { free(p) } }
+
+        guard spawnRes == 0 else {
+            return (spawnRes, "", "posix_spawn failed", Process())
+        }
+
+        try? AppProcessLifecycle.registerPID(pid)
+
         return await withCheckedContinuation { continuation in
+            let group = DispatchGroup()
+            let lock = NSLock()
+            var stdoutData = Data()
+            var stderrData = Data()
+            var isTerminated = false
+
+            // Start cancellation monitor
+            DispatchQueue.global(qos: .utility).async {
+                while true {
+                    lock.lock()
+                    let done = isTerminated
+                    lock.unlock()
+                    if done { break }
+                    if cancellationCheck() {
+                        print("🛑 Shell: Cancellation detected! Killing PID \(pid) with SIGKILL...")
+                        kill(pid, SIGKILL)
+                        break
+                    }
+                    Thread.sleep(forTimeInterval: 0.05)
+                }
+            }
+
+            // Read stdout
+            group.enter()
             DispatchQueue.global(qos: .userInitiated).async {
-                let process = Process()
-                let stdout = Pipe()
-                let stderr = Pipe()
-                
-                process.executableURL = URL(fileURLWithPath: command)
-                process.arguments = args
-                process.environment = environment(for: args)
-                process.standardOutput = stdout
-                process.standardError = stderr
-                
-                var outputData = Data()
-                var errorData = Data()
-                var hasResumed = false
-                let resumeLock = NSLock()
-                
-                // ADB outputs progress to STDERR, not STDOUT!
-                let stderrHandle = stderr.fileHandleForReading
-                
-                // Read stderr in background thread
-                DispatchQueue.global(qos: .userInitiated).async {
-                    while true {
-                        let data = stderrHandle.availableData
-                        if data.isEmpty { break }
-                        
-                        errorData.append(data)
-                        
-                        // Send progress updates
-                        if let text = String(data: data, encoding: .utf8), !text.isEmpty {
-                            DispatchQueue.main.async {
-                                progressCallback(text)
-                            }
+                while true {
+                    let chunk = stdoutPipe.fileHandleForReading.availableData
+                    if chunk.isEmpty { break }
+                    lock.lock()
+                    stdoutData.append(chunk)
+                    lock.unlock()
+                }
+                group.leave()
+            }
+
+            // Read stderr (ADB progress outputs to stderr)
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                while true {
+                    let chunk = stderrPipe.fileHandleForReading.availableData
+                    if chunk.isEmpty { break }
+                    lock.lock()
+                    stderrData.append(chunk)
+                    lock.unlock()
+                    if let text = String(data: chunk, encoding: .utf8), !text.isEmpty {
+                        DispatchQueue.main.async {
+                            progressCallback(text)
                         }
                     }
                 }
-                
-                do {
-                    try AppProcessLifecycle.run(process)
-                    defer { AppProcessLifecycle.didExit(process) }
-                    
-                    // Start cancellation monitor AFTER process starts running
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        
-                        while process.isRunning {
-                            if cancellationCheck() {
-                                let pid = process.processIdentifier
-                                print("🛑 Shell: Cancellation detected! Killing PID \(pid) with SIGKILL...")
-                                
-                                // Use SIGKILL for immediate termination (ADB may ignore SIGTERM)
-                                kill(pid, SIGKILL)
-                                
-                                print("🛑 Shell: SIGKILL sent to PID \(pid)")
-                                break
-                            }
-                            // Check every 100ms for quick response
-                            Thread.sleep(forTimeInterval: 0.1)
-                        }
-                    }
-                    
-                    process.waitUntilExit()
-                    
-                    resumeLock.lock()
-                    if !hasResumed {
-                        hasResumed = true
-                        // Get final output
-                        outputData = stdout.fileHandleForReading.readDataToEndOfFile()
-                        
-                        let output = String(data: outputData, encoding: .utf8) ?? ""
-                        let error = String(data: errorData, encoding: .utf8) ?? ""
-                        
-                        resumeLock.unlock()
-                        continuation.resume(returning: (process.terminationStatus, output, error, process))
-                    } else {
-                        resumeLock.unlock()
-                    }
-                } catch {
-                    resumeLock.lock()
-                    if !hasResumed {
-                        hasResumed = true
-                        resumeLock.unlock()
-                        continuation.resume(returning: (-1, "", error.localizedDescription, process))
-                    } else {
-                        resumeLock.unlock()
-                    }
+                group.leave()
+            }
+
+            // Wait for exit
+            DispatchQueue.global(qos: .userInitiated).async {
+                var status: Int32 = 0
+                waitpid(pid, &status, 0)
+
+                lock.lock()
+                isTerminated = true
+                lock.unlock()
+
+                AppProcessLifecycle.didExitPID(pid)
+                group.wait()
+
+                let exitCode: Int32
+                if (status & 0x7f) == 0 {
+                    exitCode = (status >> 8) & 0xff
+                } else {
+                    exitCode = -1
                 }
+
+                let outStr = String(data: stdoutData, encoding: .utf8) ?? ""
+                let errStr = String(data: stderrData, encoding: .utf8) ?? ""
+                continuation.resume(returning: (exitCode, outStr, errStr, Process()))
             }
         }
     }
