@@ -774,7 +774,7 @@ struct SidebarItemRowContainer: View {
     let onUploadToFolder: (([URL], String) -> Void)?
 
     @State private var dropPosition: DropPosition? = nil
-    @State private var isFolderTargeted = false
+    @State private var rowHeight: CGFloat = 28
 
     var body: some View {
         QuickAccessRow(
@@ -790,6 +790,7 @@ struct SidebarItemRowContainer: View {
             },
             availableGroups: sidebarManager.availableTargetGroups(currentGroupId: groupId)
         )
+        .padding(.vertical, 4)
         .background(
             SidebarRowHitTracker(
                 groupId: groupId,
@@ -799,12 +800,20 @@ struct SidebarItemRowContainer: View {
                 onItemMovedToGroup: onItemMovedToGroup
             )
         )
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { rowHeight = geo.size.height }
+                    .onChange(of: geo.size.height) { newH in rowHeight = newH }
+            }
+        )
         .overlay(alignment: .top) {
             if dropPosition == .above {
                 Rectangle()
                     .fill(Color.accentColor)
                     .frame(height: 2)
                     .padding(.horizontal, 4)
+                    .offset(y: -2)
             }
         }
         .overlay(alignment: .bottom) {
@@ -813,17 +822,7 @@ struct SidebarItemRowContainer: View {
                     .fill(Color.accentColor)
                     .frame(height: 2)
                     .padding(.horizontal, 4)
-            }
-        }
-        .overlay {
-            if isFolderTargeted {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(Color.accentColor, lineWidth: 1.5)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Color.accentColor.opacity(0.14))
-                    )
-                    .allowsHitTesting(false)
+                    .offset(y: 2)
             }
         }
         .onDrop(
@@ -837,8 +836,8 @@ struct SidebarItemRowContainer: View {
                 targetItem: item,
                 targetGroupId: groupId,
                 sidebarManager: sidebarManager,
+                rowHeight: rowHeight,
                 dropPosition: $dropPosition,
-                isFolderTargeted: $isFolderTargeted,
                 onMoveFiles: onMoveFiles,
                 onUploadToFolder: onUploadToFolder
             )
@@ -853,8 +852,8 @@ struct SidebarRowDropDelegate: DropDelegate {
     let targetItem: QuickAccessItem
     let targetGroupId: String
     let sidebarManager: SidebarManager
+    let rowHeight: CGFloat
     @Binding var dropPosition: DropPosition?
-    @Binding var isFolderTargeted: Bool
     let onMoveFiles: (([UnifiedFile], String) -> Void)?
     let onUploadToFolder: (([URL], String) -> Void)?
 
@@ -879,13 +878,7 @@ struct SidebarRowDropDelegate: DropDelegate {
         if SidebarDragState.shared.draggedItem != nil {
             return canReorderSidebarItem
         }
-        if onMoveFiles == nil {
-            return hasDraggedBrowserFolders
-        }
-        return info.hasItemsConforming(to: [
-            UTType.fileURL,
-            UTType(exportedAs: FileDragManager.internalFileUTI, conformingTo: .data)
-        ])
+        return hasDraggedBrowserFolders
     }
 
     func dropEntered(info: DropInfo) {
@@ -896,36 +889,29 @@ struct SidebarRowDropDelegate: DropDelegate {
         updatePosition(info: info)
         if SidebarDragState.shared.draggedItem != nil {
             return canReorderSidebarItem ? DropProposal(operation: .move) : DropProposal(operation: .forbidden)
-        } else if onMoveFiles == nil {
-            return hasDraggedBrowserFolders ? DropProposal(operation: .copy) : DropProposal(operation: .forbidden)
-        } else {
+        } else if hasDraggedBrowserFolders {
             return DropProposal(operation: .copy)
+        } else {
+            return DropProposal(operation: .forbidden)
         }
     }
 
     private func updatePosition(info: DropInfo) {
-        if canReorderSidebarItem || (onMoveFiles == nil && hasDraggedBrowserFolders) {
-            isFolderTargeted = false
-            let y = info.location.y
-            dropPosition = (y < 14) ? .above : .below
-        } else if onMoveFiles != nil {
-            dropPosition = nil
-            isFolderTargeted = FileDragManager.shared.canDrop(onto: targetItem.path)
+        if canReorderSidebarItem || hasDraggedBrowserFolders {
+            let midY = max(rowHeight / 2, 10)
+            dropPosition = (info.location.y < midY) ? .above : .below
         } else {
             dropPosition = nil
-            isFolderTargeted = false
         }
     }
 
     func dropExited(info: DropInfo) {
         dropPosition = nil
-        isFolderTargeted = false
     }
 
     func performDrop(info: DropInfo) -> Bool {
         let pos = dropPosition ?? .below
         dropPosition = nil
-        isFolderTargeted = false
 
         if let dragged = SidebarDragState.shared.draggedItem {
             guard canReorderSidebarItem else {
@@ -948,48 +934,24 @@ struct SidebarRowDropDelegate: DropDelegate {
         // Handle internal files drop from FileBrowserView
         let internalFiles = FileDragManager.shared.draggedFiles
         if !internalFiles.isEmpty {
-            if let onMoveFiles {
-                guard FileDragManager.shared.canDrop(onto: targetItem.path) else { return false }
-                onMoveFiles(internalFiles, targetItem.path)
-                return true
-            } else {
-                guard !isTargetDefaultGroup else { return false }
-                let folders = internalFiles.filter { $0.isDirectory }
-                guard !folders.isEmpty else { return false }
-                for folder in folders {
-                    sidebarManager.addItem(
-                        name: folder.name,
-                        path: folder.path,
-                        icon: "folder.fill",
-                        color: "blue",
-                        toGroupId: targetGroupId,
-                        relativeTo: targetItem.path,
-                        position: pos
-                    )
-                }
-                return true
-            }
-        }
-
-        // Handle Finder files drop
-        if let onUploadToFolder {
-            Task {
-                var urls: [URL] = []
-                for provider in info.itemProviders(for: [.fileURL]) {
-                    if let item = try? await provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier),
-                       let data = item as? Data,
-                       let url = URL(dataRepresentation: data, relativeTo: nil) {
-                        urls.append(url)
-                    }
-                }
-                if !urls.isEmpty {
-                    await MainActor.run {
-                        onUploadToFolder(urls, targetItem.path)
-                    }
-                }
+            guard !isTargetDefaultGroup else { return false }
+            let folders = internalFiles.filter { $0.isDirectory }
+            guard !folders.isEmpty else { return false }
+            let orderedFolders = (pos == .above) ? folders.reversed() : folders
+            for folder in orderedFolders {
+                sidebarManager.addItem(
+                    name: folder.name,
+                    path: folder.path,
+                    icon: "folder.fill",
+                    color: "blue",
+                    toGroupId: targetGroupId,
+                    relativeTo: targetItem.path,
+                    position: pos
+                )
             }
             return true
         }
+
         return false
     }
 }
