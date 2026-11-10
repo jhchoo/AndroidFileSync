@@ -2,16 +2,58 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
-// MARK: - Sidebar Drag & Hit State
+// MARK: - Sidebar Drag & Click Manager
 
 @MainActor
-final class SidebarDragState {
+final class SidebarDragState: NSObject, NSDraggingSource {
     static let shared = SidebarDragState()
 
     var draggedItem: QuickAccessItem? = nil
     var draggedGroupId: String? = nil
 
+    var currentPath: String = ""
+    var hasActiveAppFilter: Bool = false
+
+    var onSelectFolder: ((String, String) -> Void)? = nil
+    var onSelectApps: (() -> Void)? = nil
+    var onItemMovedToGroup: ((String, String) -> Void)? = nil
+
     private let rowViews = NSHashTable<SidebarRowTrackingNSView>.weakObjects()
+    private var mouseMonitor: Any? = nil
+
+    private weak var mouseDownView: SidebarRowTrackingNSView? = nil
+    private var mouseDownItem: QuickAccessItem? = nil
+    private var mouseDownGroupId: String? = nil
+    private var mouseDownPoint: NSPoint? = nil
+    private var lastMouseDownEvent: NSEvent? = nil
+    private var didStartDrag: Bool = false
+
+    func installMonitorIfNeeded() {
+        guard mouseMonitor == nil else { return }
+        mouseMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        ) { [weak self] event in
+            guard let self else { return event }
+            return self.handleMouseEvent(event)
+        }
+    }
+
+    func removeMonitor() {
+        if let monitor = mouseMonitor {
+            NSEvent.removeMonitor(monitor)
+            mouseMonitor = nil
+        }
+        resetMouseTracking()
+    }
+
+    private func resetMouseTracking() {
+        mouseDownView = nil
+        mouseDownItem = nil
+        mouseDownGroupId = nil
+        mouseDownPoint = nil
+        lastMouseDownEvent = nil
+        didStartDrag = false
+    }
 
     func startDrag(item: QuickAccessItem, groupId: String) {
         self.draggedItem = item
@@ -31,44 +73,247 @@ final class SidebarDragState {
         rowViews.remove(view)
     }
 
-    func hitTestRow(windowPoint: NSPoint, in window: NSWindow?) -> (groupId: String, path: String)? {
+    func hitTestRowView(windowPoint: NSPoint, in window: NSWindow?) -> SidebarRowTrackingNSView? {
         guard let window else { return nil }
         for view in rowViews.allObjects {
             guard view.window === window,
                   !view.isHiddenOrHasHiddenAncestor,
-                  !view.groupId.isEmpty,
-                  !view.path.isEmpty else { continue }
-            let localPoint = view.convert(windowPoint, from: nil)
-            if view.bounds.contains(localPoint) {
-                return (view.groupId, view.path)
+                  !view.groupId.isEmpty else { continue }
+            if view.containsWindowPoint(windowPoint) {
+                return view
             }
         }
         return nil
+    }
+
+    private func handleMouseEvent(_ event: NSEvent) -> NSEvent? {
+        guard NSApp.modalWindow == nil,
+              let window = event.window,
+              window.isKeyWindow,
+              window.attachedSheet == nil else {
+            resetMouseTracking()
+            return event
+        }
+
+        switch event.type {
+        case .leftMouseDown:
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            // Allow Control+click to trigger the context menu normally
+            guard !flags.contains(.control) else {
+                resetMouseTracking()
+                return event
+            }
+            guard let rowView = hitTestRowView(windowPoint: event.locationInWindow, in: window) else {
+                resetMouseTracking()
+                return event
+            }
+            mouseDownView = rowView
+            mouseDownItem = rowView.item
+            mouseDownGroupId = rowView.groupId
+            mouseDownPoint = event.locationInWindow
+            lastMouseDownEvent = event
+            didStartDrag = false
+            // Consume leftMouseDown on sidebar shortcut rows so NSOutlineView does not
+            // hijack the drag or swallow the first click after a drag-and-drop.
+            return nil
+
+        case .leftMouseDragged:
+            guard let downPt = mouseDownPoint else { return event }
+            if didStartDrag {
+                return nil
+            }
+            let distance = hypot(event.locationInWindow.x - downPt.x, event.locationInWindow.y - downPt.y)
+            guard distance > 3 else {
+                return nil
+            }
+            didStartDrag = true
+            guard let view = mouseDownView,
+                  let item = mouseDownItem,
+                  let groupId = mouseDownGroupId else {
+                resetMouseTracking()
+                return nil
+            }
+            let dragEvt = lastMouseDownEvent ?? event
+            resetMouseTracking()
+            beginSidebarDragSession(item: item, groupId: groupId, from: view, event: dragEvt)
+            return nil
+
+        case .leftMouseUp:
+            clear()
+            guard let downPt = mouseDownPoint,
+                  let groupId = mouseDownGroupId else {
+                resetMouseTracking()
+                return event
+            }
+            let item = mouseDownItem
+            let wasDrag = didStartDrag
+            resetMouseTracking()
+
+            if !wasDrag {
+                let distance = hypot(event.locationInWindow.x - downPt.x, event.locationInWindow.y - downPt.y)
+                if distance <= 6 {
+                    if groupId == "__apps__" {
+                        onSelectApps?()
+                    } else if let item {
+                        onSelectFolder?(groupId, item.path)
+                    }
+                } else if let upView = hitTestRowView(windowPoint: event.locationInWindow, in: window),
+                          upView.groupId == groupId,
+                          upView.item?.path == item?.path {
+                    if groupId == "__apps__" {
+                        onSelectApps?()
+                    } else if let item {
+                        onSelectFolder?(groupId, item.path)
+                    }
+                }
+            }
+            return nil
+
+        default:
+            return event
+        }
+    }
+
+    private func beginSidebarDragSession(
+        item: QuickAccessItem,
+        groupId: String,
+        from view: NSView,
+        event: NSEvent
+    ) {
+        self.draggedItem = item
+        self.draggedGroupId = groupId
+
+        let pasteboardItem = NSPasteboardItem()
+        pasteboardItem.setString("sidebar-item:" + item.id, forType: .string)
+
+        let dragItem = NSDraggingItem(pasteboardWriter: pasteboardItem)
+        let image = Self.createDragImage(for: item)
+        let mouseInView = view.convert(event.locationInWindow, from: nil)
+        let frame = NSRect(
+            x: mouseInView.x - 18,
+            y: mouseInView.y - image.size.height / 2,
+            width: image.size.width,
+            height: image.size.height
+        )
+        dragItem.setDraggingFrame(frame, contents: image)
+
+        let session = view.beginDraggingSession(with: [dragItem], event: event, source: self)
+        session.animatesToStartingPositionsOnCancelOrFail = true
+        session.draggingFormation = .none
+    }
+
+    private static func createDragImage(for item: QuickAccessItem) -> NSImage {
+        let font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.labelColor
+        ]
+        let textSize = (item.name as NSString).size(withAttributes: attrs)
+        let width = min(max(textSize.width + 40, 90), 200)
+        let height: CGFloat = 26
+        let size = NSSize(width: width, height: height)
+
+        let image = NSImage(size: size)
+        image.lockFocus()
+
+        let bgRect = NSRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1)
+        let path = NSBezierPath(roundedRect: bgRect, xRadius: 6, yRadius: 6)
+        NSColor.controlBackgroundColor.withAlphaComponent(0.92).setFill()
+        path.fill()
+        NSColor.separatorColor.withAlphaComponent(0.5).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+
+        if let symbol = NSImage(systemSymbolName: item.icon, accessibilityDescription: item.name) {
+            let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+                .applying(.init(paletteColors: [item.color.color]))
+            let configured = symbol.withSymbolConfiguration(config) ?? symbol
+            let iconRect = NSRect(x: 8, y: (height - 15) / 2, width: 15, height: 15)
+            configured.draw(in: iconRect)
+        }
+
+        let textRect = NSRect(
+            x: 28,
+            y: (height - textSize.height) / 2,
+            width: width - 34,
+            height: textSize.height
+        )
+        (item.name as NSString).draw(
+            with: textRect,
+            options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+            attributes: attrs
+        )
+
+        image.unlockFocus()
+        return image
+    }
+
+    // MARK: - NSDraggingSource
+
+    nonisolated func draggingSession(
+        _ session: NSDraggingSession,
+        sourceOperationMaskFor context: NSDraggingContext
+    ) -> NSDragOperation {
+        switch context {
+        case .withinApplication:
+            return [.move, .copy]
+        case .outsideApplication:
+            return []
+        @unknown default:
+            return [.move, .copy]
+        }
+    }
+
+    nonisolated func draggingSession(
+        _ session: NSDraggingSession,
+        endedAt screenPoint: NSPoint,
+        operation: NSDragOperation
+    ) {
+        Task { @MainActor in
+            SidebarDragState.shared.clear()
+        }
     }
 }
 
 final class SidebarRowTrackingNSView: NSView {
     var groupId: String = ""
-    var path: String = ""
+    var item: QuickAccessItem? = nil
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
     }
 
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        Task { @MainActor in
-            if self.window != nil {
-                SidebarDragState.shared.registerRowView(self)
-            } else {
-                SidebarDragState.shared.unregisterRowView(self)
+    func containsWindowPoint(_ windowPoint: NSPoint) -> Bool {
+        guard let window else { return false }
+        if let contentView = window.contentView {
+            let contentPoint = contentView.convert(windowPoint, from: nil)
+            var hit = contentView.hitTest(contentPoint)
+            while let v = hit {
+                if v is NSScroller { return false }
+                hit = v.superview
             }
         }
+        if let clipView = enclosingScrollView?.contentView {
+            let clipPoint = clipView.convert(windowPoint, from: nil)
+            guard clipView.bounds.contains(clipPoint) else { return false }
+        }
+        var cursor: NSView? = self
+        while let current = cursor {
+            if let rowView = current as? NSTableRowView {
+                let rowPoint = rowView.convert(windowPoint, from: nil)
+                return rowView.bounds.contains(rowPoint)
+            }
+            cursor = current.superview
+        }
+        let localPoint = convert(windowPoint, from: nil)
+        return bounds.insetBy(dx: -8, dy: -4).contains(localPoint)
     }
 
-    deinit {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            SidebarDragState.shared.registerRowView(self)
+        } else {
             SidebarDragState.shared.unregisterRowView(self)
         }
     }
@@ -76,20 +321,33 @@ final class SidebarRowTrackingNSView: NSView {
 
 struct SidebarRowHitTracker: NSViewRepresentable {
     let groupId: String
-    let path: String
+    let item: QuickAccessItem?
+    let onSelectFolder: (String, String) -> Void
+    let onSelectApps: (() -> Void)?
+    let onItemMovedToGroup: (String, String) -> Void
 
     func makeNSView(context: Context) -> SidebarRowTrackingNSView {
         let view = SidebarRowTrackingNSView()
         view.groupId = groupId
-        view.path = path
+        view.item = item
+        SidebarDragState.shared.onSelectFolder = onSelectFolder
+        SidebarDragState.shared.onSelectApps = onSelectApps
+        SidebarDragState.shared.onItemMovedToGroup = onItemMovedToGroup
         SidebarDragState.shared.registerRowView(view)
         return view
     }
 
     func updateNSView(_ nsView: SidebarRowTrackingNSView, context: Context) {
         nsView.groupId = groupId
-        nsView.path = path
+        nsView.item = item
+        SidebarDragState.shared.onSelectFolder = onSelectFolder
+        SidebarDragState.shared.onSelectApps = onSelectApps
+        SidebarDragState.shared.onItemMovedToGroup = onItemMovedToGroup
         SidebarDragState.shared.registerRowView(nsView)
+    }
+
+    static func dismantleNSView(_ nsView: SidebarRowTrackingNSView, coordinator: ()) {
+        SidebarDragState.shared.unregisterRowView(nsView)
     }
 }
 
@@ -111,10 +369,8 @@ struct SidebarView: View {
     @State private var groupToDelete: SidebarGroup? = nil
     @State private var showDeleteGroupAlert = false
     @State private var isAddGroupHovered = false
+    @State private var isQuickAccessHeaderTargeted = false
     @State private var activeSelectionGroupId: String? = nil
-    @State private var mouseMonitor: Any? = nil
-    @State private var pendingMouseDownRow: (groupId: String, path: String)? = nil
-    @State private var pendingMouseDownPoint: NSPoint? = nil
 
     enum SidebarItem: Hashable {
         case folder(groupId: String, path: String)
@@ -149,8 +405,16 @@ struct SidebarView: View {
 
     private func selectFolder(groupId: String, path: String) {
         activeSelectionGroupId = groupId
-        guard currentPath != path || activeAppFilter != nil else { return }
+        guard SidebarDragState.shared.currentPath != path || SidebarDragState.shared.hasActiveAppFilter else { return }
+        SidebarDragState.shared.currentPath = path
+        SidebarDragState.shared.hasActiveAppFilter = false
         onNavigate(path)
+    }
+
+    private func handleItemMovedToGroup(itemPath: String, targetGroupId: String) {
+        if SidebarDragState.shared.currentPath == itemPath {
+            activeSelectionGroupId = targetGroupId
+        }
     }
 
     // Derived binding to map external state to List selection
@@ -164,6 +428,7 @@ struct SidebarView: View {
             case .folder(let groupId, let path):
                 selectFolder(groupId: groupId, path: path)
             case .apps:
+                SidebarDragState.shared.hasActiveAppFilter = true
                 onSelectAppFilter?(.user)
             }
         }
@@ -190,20 +455,23 @@ struct SidebarView: View {
                                 groupId: "quick_access",
                                 sidebarManager: sidebarManager,
                                 storageStats: storageStats,
+                                onSelectFolder: selectFolder,
+                                onSelectApps: {
+                                    SidebarDragState.shared.hasActiveAppFilter = true
+                                    onSelectAppFilter?(.user)
+                                },
+                                onItemMovedToGroup: handleItemMovedToGroup,
                                 onMoveFiles: onMoveFiles,
                                 onUploadToFolder: onUploadToFolder
                             )
                             .id("quick_access:\(item.path)")
-                        }
-                        .onMove { indices, newOffset in
-                            sidebarManager.moveQuickAccessItems(fromOffsets: indices, toOffset: newOffset)
                         }
                     }
                 } header: {
                     HStack {
                         Text("Quick Access")
                             .font(.system(size: 11, weight: .bold))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(isQuickAccessHeaderTargeted ? Color.accentColor : .secondary)
                             .padding(.vertical, 2)
                             .padding(.horizontal, 4)
 
@@ -223,18 +491,25 @@ struct SidebarView: View {
                         .help("Add New Group")
                         .onHover { isAddGroupHovered = $0 }
                     }
+                    .padding(.vertical, 1)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(isQuickAccessHeaderTargeted ? Color.accentColor.opacity(0.15) : Color.clear)
+                    )
                     .contentShape(Rectangle())
                     .contextMenu {
                         Button("Add Group...", action: createNewGroup)
                     }
                     .onDrop(
                         of: [
+                            UTType.plainText.identifier,
                             UTType.text.identifier,
                             FileDragManager.internalFileUTI
                         ],
                         delegate: GroupHeaderDropDelegate(
                             targetGroupId: "quick_access",
-                            sidebarManager: sidebarManager
+                            sidebarManager: sidebarManager,
+                            isTargeted: $isQuickAccessHeaderTargeted
                         )
                     )
                 }
@@ -257,32 +532,26 @@ struct SidebarView: View {
                                     groupId: group.id,
                                     sidebarManager: sidebarManager,
                                     storageStats: storageStats,
+                                    onSelectFolder: selectFolder,
+                                    onSelectApps: {
+                                        SidebarDragState.shared.hasActiveAppFilter = true
+                                        onSelectAppFilter?(.user)
+                                    },
+                                    onItemMovedToGroup: handleItemMovedToGroup,
                                     onMoveFiles: onMoveFiles,
                                     onUploadToFolder: onUploadToFolder
                                 )
                                 .id("\(group.id):\(item.path)")
                             }
-                            .onMove { indices, newOffset in
-                                sidebarManager.moveItems(inGroupId: group.id, fromOffsets: indices, toOffset: newOffset)
-                            }
                         }
                     } header: {
                         GroupHeaderView(
                             group: group,
+                            sidebarManager: sidebarManager,
                             onRenameGroup: { renameGroup(group) },
                             onDeleteGroup: { confirmDeleteGroup(group) },
                             onRestoreBuiltIns: { },
                             hasHiddenBuiltIns: false
-                        )
-                        .onDrop(
-                            of: [
-                                UTType.text.identifier,
-                                FileDragManager.internalFileUTI
-                            ],
-                            delegate: GroupHeaderDropDelegate(
-                                targetGroupId: group.id,
-                                sidebarManager: sidebarManager
-                            )
                         )
                     }
                 }
@@ -297,17 +566,21 @@ struct SidebarView: View {
                                 groupId: defaultGroup.id,
                                 sidebarManager: sidebarManager,
                                 storageStats: storageStats,
+                                onSelectFolder: selectFolder,
+                                onSelectApps: {
+                                    SidebarDragState.shared.hasActiveAppFilter = true
+                                    onSelectAppFilter?(.user)
+                                },
+                                onItemMovedToGroup: handleItemMovedToGroup,
                                 onMoveFiles: onMoveFiles,
                                 onUploadToFolder: onUploadToFolder
                             )
                             .id("\(defaultGroup.id):\(item.path)")
                         }
-                        .onMove { indices, newOffset in
-                            sidebarManager.moveItems(inGroupId: defaultGroup.id, fromOffsets: indices, toOffset: newOffset)
-                        }
                     } header: {
                         GroupHeaderView(
                             group: defaultGroup,
+                            sidebarManager: sidebarManager,
                             onRenameGroup: { },
                             onDeleteGroup: { },
                             onRestoreBuiltIns: { showRestoreAlert = true },
@@ -320,6 +593,19 @@ struct SidebarView: View {
                 if onSelectAppFilter != nil {
                     Section("Apps") {
                         Label("Apps", systemImage: "square.grid.2x2.fill")
+                            .contentShape(Rectangle())
+                            .background(
+                                SidebarRowHitTracker(
+                                    groupId: "__apps__",
+                                    item: nil,
+                                    onSelectFolder: selectFolder,
+                                    onSelectApps: {
+                                        SidebarDragState.shared.hasActiveAppFilter = true
+                                        onSelectAppFilter?(.user)
+                                    },
+                                    onItemMovedToGroup: handleItemMovedToGroup
+                                )
+                            )
                             .tag(SidebarItem.apps)
                     }
                 }
@@ -388,67 +674,28 @@ struct SidebarView: View {
         } message: {
             Text("Are you sure you want to delete '\(groupToDelete?.name ?? "")'?")
         }
+        .onChange(of: currentPath) { newValue in
+            SidebarDragState.shared.currentPath = newValue
+            SidebarDragState.shared.onSelectFolder = selectFolder
+        }
+        .onChange(of: activeAppFilter != nil) { newValue in
+            SidebarDragState.shared.hasActiveAppFilter = newValue
+            SidebarDragState.shared.onSelectFolder = selectFolder
+        }
         .onAppear {
-            if mouseMonitor == nil {
-                mouseMonitor = NSEvent.addLocalMonitorForEvents(
-                    matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
-                ) { event in
-                    guard NSApp.modalWindow == nil,
-                          event.window?.attachedSheet == nil else {
-                        pendingMouseDownRow = nil
-                        pendingMouseDownPoint = nil
-                        return event
-                    }
-                    switch event.type {
-                    case .leftMouseDown:
-                        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                        if flags.contains(.control) {
-                            pendingMouseDownRow = nil
-                            pendingMouseDownPoint = nil
-                        } else if let hit = SidebarDragState.shared.hitTestRow(
-                            windowPoint: event.locationInWindow,
-                            in: event.window
-                        ) {
-                            pendingMouseDownRow = hit
-                            pendingMouseDownPoint = event.locationInWindow
-                        } else {
-                            pendingMouseDownRow = nil
-                            pendingMouseDownPoint = nil
-                        }
-                    case .leftMouseDragged:
-                        if let downPt = pendingMouseDownPoint,
-                           hypot(event.locationInWindow.x - downPt.x, event.locationInWindow.y - downPt.y) > 4 {
-                            pendingMouseDownRow = nil
-                            pendingMouseDownPoint = nil
-                        }
-                    case .leftMouseUp:
-                        SidebarDragState.shared.clear()
-                        if let downRow = pendingMouseDownRow,
-                           let downPt = pendingMouseDownPoint {
-                            pendingMouseDownRow = nil
-                            pendingMouseDownPoint = nil
-                            if hypot(event.locationInWindow.x - downPt.x, event.locationInWindow.y - downPt.y) <= 5,
-                               let upRow = SidebarDragState.shared.hitTestRow(
-                                   windowPoint: event.locationInWindow,
-                                   in: event.window
-                               ),
-                               upRow.groupId == downRow.groupId && upRow.path == downRow.path {
-                                selectFolder(groupId: downRow.groupId, path: downRow.path)
-                            }
-                        }
-                    default:
-                        break
-                    }
-                    return event
-                }
+            SidebarDragState.shared.currentPath = currentPath
+            SidebarDragState.shared.hasActiveAppFilter = (activeAppFilter != nil)
+            SidebarDragState.shared.onSelectFolder = selectFolder
+            SidebarDragState.shared.onSelectApps = {
+                SidebarDragState.shared.hasActiveAppFilter = true
+                onSelectAppFilter?(.user)
             }
+            SidebarDragState.shared.onItemMovedToGroup = handleItemMovedToGroup
+            SidebarDragState.shared.installMonitorIfNeeded()
             Task { await sidebarManager.checkExistence() }
         }
         .onDisappear {
-            if let monitor = mouseMonitor {
-                NSEvent.removeMonitor(monitor)
-                mouseMonitor = nil
-            }
+            SidebarDragState.shared.removeMonitor()
         }
     }
 
@@ -490,6 +737,9 @@ struct SidebarItemRowContainer: View {
     let groupId: String
     @ObservedObject var sidebarManager: SidebarManager
     let storageStats: [String: DeviceManager.StorageInfo]
+    let onSelectFolder: (String, String) -> Void
+    let onSelectApps: (() -> Void)?
+    let onItemMovedToGroup: (String, String) -> Void
     let onMoveFiles: (([UnifiedFile], String) -> Void)?
     let onUploadToFolder: (([URL], String) -> Void)?
 
@@ -506,10 +756,19 @@ struct SidebarItemRowContainer: View {
             },
             onMoveToGroup: { targetGroupId in
                 sidebarManager.moveItemToGroup(item, fromGroupId: groupId, toGroupId: targetGroupId)
+                onItemMovedToGroup(item.path, targetGroupId)
             },
             availableGroups: sidebarManager.availableTargetGroups(currentGroupId: groupId)
         )
-        .background(SidebarRowHitTracker(groupId: groupId, path: item.path))
+        .background(
+            SidebarRowHitTracker(
+                groupId: groupId,
+                item: item,
+                onSelectFolder: onSelectFolder,
+                onSelectApps: onSelectApps,
+                onItemMovedToGroup: onItemMovedToGroup
+            )
+        )
         .overlay(alignment: .top) {
             if dropPosition == .above {
                 Rectangle()
@@ -537,12 +796,9 @@ struct SidebarItemRowContainer: View {
                     .allowsHitTesting(false)
             }
         }
-        .onDrag {
-            SidebarDragState.shared.startDrag(item: item, groupId: groupId)
-            return NSItemProvider(object: ("sidebar-item:" + item.id) as NSString)
-        }
         .onDrop(
             of: [
+                UTType.plainText.identifier,
                 UTType.text.identifier,
                 FileDragManager.internalFileUTI,
                 UTType.fileURL.identifier
@@ -580,7 +836,8 @@ struct SidebarRowDropDelegate: DropDelegate {
         guard SidebarDragState.shared.draggedItem != nil else { return false }
         let fromGroupId = SidebarDragState.shared.draggedGroupId ?? targetGroupId
         let isFromDefaultGroup = sidebarManager.groups.first(where: { $0.id == fromGroupId })?.isDefault == true
-        // Default group items can only be reordered within the default group; custom items cannot enter the default group
+        // Default group items can only be reordered within the default group;
+        // Quick Access and Custom Group items can move freely within and between Quick Access and Custom Groups.
         return isFromDefaultGroup == isTargetDefaultGroup
     }
 
@@ -653,6 +910,7 @@ struct SidebarRowDropDelegate: DropDelegate {
                 relativeTo: targetItem.path,
                 position: pos
             )
+            SidebarDragState.shared.onItemMovedToGroup?(dragged.path, targetGroupId)
             SidebarDragState.shared.clear()
             return true
         }
@@ -711,6 +969,7 @@ struct SidebarRowDropDelegate: DropDelegate {
 struct GroupHeaderDropDelegate: DropDelegate {
     let targetGroupId: String
     let sidebarManager: SidebarManager
+    @Binding var isTargeted: Bool
 
     private var isTargetDefaultGroup: Bool {
         sidebarManager.groups.first(where: { $0.id == targetGroupId })?.isDefault == true
@@ -727,11 +986,20 @@ struct GroupHeaderDropDelegate: DropDelegate {
         !isTargetDefaultGroup && FileDragManager.shared.draggedFiles.contains(where: { $0.isDirectory })
     }
 
+    private var canAcceptDrop: Bool {
+        canAcceptSidebarItem || canAcceptBrowserFolders
+    }
+
     func validateDrop(info: DropInfo) -> Bool {
-        return canAcceptSidebarItem || canAcceptBrowserFolders
+        return canAcceptDrop
+    }
+
+    func dropEntered(info: DropInfo) {
+        isTargeted = canAcceptDrop
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
+        isTargeted = canAcceptDrop
         if canAcceptSidebarItem {
             return DropProposal(operation: .move)
         }
@@ -741,7 +1009,12 @@ struct GroupHeaderDropDelegate: DropDelegate {
         return DropProposal(operation: .forbidden)
     }
 
+    func dropExited(info: DropInfo) {
+        isTargeted = false
+    }
+
     func performDrop(info: DropInfo) -> Bool {
+        isTargeted = false
         guard !isTargetDefaultGroup else { return false }
 
         if let dragged = SidebarDragState.shared.draggedItem {
@@ -757,6 +1030,7 @@ struct GroupHeaderDropDelegate: DropDelegate {
                 relativeTo: nil,
                 position: .below
             )
+            SidebarDragState.shared.onItemMovedToGroup?(dragged.path, targetGroupId)
             SidebarDragState.shared.clear()
             return true
         }
@@ -845,6 +1119,7 @@ struct EmptyGroupDropDelegate: DropDelegate {
                 relativeTo: nil,
                 position: .below
             )
+            SidebarDragState.shared.onItemMovedToGroup?(dragged.path, groupId)
             SidebarDragState.shared.clear()
             return true
         }
@@ -895,6 +1170,7 @@ struct EmptyGroupDropPlaceholder: View {
         )
         .onDrop(
             of: [
+                UTType.plainText.identifier,
                 UTType.text.identifier,
                 FileDragManager.internalFileUTI
             ],
@@ -911,6 +1187,7 @@ struct EmptyGroupDropPlaceholder: View {
 
 struct GroupHeaderView: View {
     let group: SidebarGroup
+    let sidebarManager: SidebarManager
     let onRenameGroup: () -> Void
     let onDeleteGroup: () -> Void
     let onRestoreBuiltIns: () -> Void
@@ -919,12 +1196,13 @@ struct GroupHeaderView: View {
     @State private var isRenameHovered = false
     @State private var isDeleteHovered = false
     @State private var isRestoreHovered = false
+    @State private var isDropTargeted = false
 
     var body: some View {
         HStack {
             Text(group.name)
                 .font(.system(size: 11, weight: .bold))
-                .foregroundColor(.secondary)
+                .foregroundColor(isDropTargeted ? Color.accentColor : .secondary)
                 .padding(.vertical, 2)
                 .padding(.horizontal, 4)
 
@@ -980,6 +1258,11 @@ struct GroupHeaderView: View {
                 }
             }
         }
+        .padding(.vertical, 1)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(isDropTargeted ? Color.accentColor.opacity(0.15) : Color.clear)
+        )
         .contentShape(Rectangle())
         .contextMenu {
             if group.isDefault {
@@ -992,6 +1275,18 @@ struct GroupHeaderView: View {
                 Button("Delete Group", role: .destructive, action: onDeleteGroup)
             }
         }
+        .onDrop(
+            of: [
+                UTType.plainText.identifier,
+                UTType.text.identifier,
+                FileDragManager.internalFileUTI
+            ],
+            delegate: GroupHeaderDropDelegate(
+                targetGroupId: group.id,
+                sidebarManager: sidebarManager,
+                isTargeted: $isDropTargeted
+            )
+        )
     }
 }
 
