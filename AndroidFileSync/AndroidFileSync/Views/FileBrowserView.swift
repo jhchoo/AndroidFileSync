@@ -251,11 +251,12 @@ struct FileBrowserView: View {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(.secondary)
-                        .frame(width: 30, height: 30)
+                        .frame(width: 24, height: 24)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help("Go back")
+                .padding(.trailing, 2)
             }
             
             // Breadcrumb path
@@ -329,7 +330,7 @@ struct FileBrowserView: View {
             .help("Upload files to this folder")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 7)
+        .frame(height: 38)
         .background(.bar)
         .overlay(alignment: .bottom) {
             Divider()
