@@ -21,6 +21,11 @@ struct TargetGroupOption: Identifiable {
     let name: String
 }
 
+struct SidebarDropSlot: Equatable {
+    let groupId: String
+    let index: Int
+}
+
 class SidebarManager: ObservableObject {
 
     // MARK: - Published State
@@ -43,6 +48,29 @@ class SidebarManager: ObservableObject {
     /// Dynamically injected SD card item (nil when no card detected)
     @Published var sdCardItem: QuickAccessItem? = nil
     @Published private(set) var internalStoragePath = "/storage/emulated/0"
+
+    /// Current drop slot target in sidebar: (groupId, index)
+    @Published var activeDropSlot: SidebarDropSlot? = nil
+    private var dropSessionToken = UUID()
+
+    func setActiveDropSlot(_ slot: SidebarDropSlot?) {
+        dropSessionToken = UUID()
+        activeDropSlot = slot
+    }
+
+    func clearDropSlotDelayed() {
+        let token = UUID()
+        dropSessionToken = token
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+            guard let self, self.dropSessionToken == token else { return }
+            self.activeDropSlot = nil
+        }
+    }
+
+    func clearDropSlotImmediately() {
+        dropSessionToken = UUID()
+        activeDropSlot = nil
+    }
 
     // MARK: - Computed Properties (Compatibility)
 

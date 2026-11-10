@@ -313,8 +313,28 @@ final class SidebarRowTrackingNSView: NSView {
         super.viewDidMoveToWindow()
         if window != nil {
             SidebarDragState.shared.registerRowView(self)
+            disableDropFeedback()
         } else {
             SidebarDragState.shared.unregisterRowView(self)
+        }
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        disableDropFeedback()
+    }
+
+    private func disableDropFeedback() {
+        if let table = enclosingScrollView?.documentView as? NSTableView {
+            table.draggingDestinationFeedbackStyle = .none
+        }
+        var cursor: NSView? = self
+        while let current = cursor {
+            if let rowView = current as? NSTableRowView {
+                rowView.draggingDestinationFeedbackStyle = .none
+                break
+            }
+            cursor = current.superview
         }
     }
 }
@@ -436,6 +456,12 @@ struct SidebarView: View {
             if onSelectAppFilter != nil && activeAppFilter != nil { return .apps }
             return .folder(groupId: resolvedGroupId(for: currentPath), path: currentPath)
         } set: { newValue in
+            // Guard: prevent drag-and-drop operations from changing selection or navigating
+            guard !FileDragManager.shared.isDragging,
+                  FileDragManager.shared.draggedFiles.isEmpty,
+                  SidebarDragState.shared.draggedItem == nil else {
+                return
+            }
             guard let val = newValue else { return }
             switch val {
             case .folder(let groupId, let path):
@@ -468,9 +494,11 @@ struct SidebarView: View {
                         )
                         .listRowBackground(Color.clear)
                     } else {
-                        ForEach(qaItems) { item in
+                        ForEach(Array(qaItems.enumerated()), id: \.element.id) { index, item in
                             SidebarItemRowContainer(
                                 item: item,
+                                itemIndex: index,
+                                totalItemCount: qaItems.count,
                                 groupId: "quick_access",
                                 sidebarManager: sidebarManager,
                                 storageStats: storageStats,
@@ -545,9 +573,11 @@ struct SidebarView: View {
                             )
                             .listRowBackground(Color.clear)
                         } else {
-                            ForEach(items) { item in
+                            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                                 SidebarItemRowContainer(
                                     item: item,
+                                    itemIndex: index,
+                                    totalItemCount: items.count,
                                     groupId: group.id,
                                     sidebarManager: sidebarManager,
                                     storageStats: storageStats,
@@ -579,9 +609,11 @@ struct SidebarView: View {
                 if let defaultGroup = sidebarManager.defaultGroup {
                     Section {
                         let items = sidebarManager.visibleItems(in: defaultGroup)
-                        ForEach(items) { item in
+                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                             SidebarItemRowContainer(
                                 item: item,
+                                itemIndex: index,
+                                totalItemCount: items.count,
                                 groupId: defaultGroup.id,
                                 sidebarManager: sidebarManager,
                                 storageStats: storageStats,
@@ -764,6 +796,8 @@ struct SidebarView: View {
 
 struct SidebarItemRowContainer: View {
     let item: QuickAccessItem
+    let itemIndex: Int
+    let totalItemCount: Int
     let groupId: String
     @ObservedObject var sidebarManager: SidebarManager
     let storageStats: [String: DeviceManager.StorageInfo]
@@ -773,8 +807,16 @@ struct SidebarItemRowContainer: View {
     let onMoveFiles: (([UnifiedFile], String) -> Void)?
     let onUploadToFolder: (([URL], String) -> Void)?
 
-    @State private var dropPosition: DropPosition? = nil
     @State private var rowHeight: CGFloat = 28
+
+    private var isTopLineActive: Bool {
+        sidebarManager.activeDropSlot == SidebarDropSlot(groupId: groupId, index: itemIndex)
+    }
+
+    private var isBottomLineActive: Bool {
+        itemIndex == totalItemCount - 1 &&
+        sidebarManager.activeDropSlot == SidebarDropSlot(groupId: groupId, index: totalItemCount)
+    }
 
     var body: some View {
         QuickAccessRow(
@@ -791,6 +833,7 @@ struct SidebarItemRowContainer: View {
             availableGroups: sidebarManager.availableTargetGroups(currentGroupId: groupId)
         )
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
         .background(
             SidebarRowHitTracker(
                 groupId: groupId,
@@ -808,7 +851,7 @@ struct SidebarItemRowContainer: View {
             }
         )
         .overlay(alignment: .top) {
-            if dropPosition == .above {
+            if isTopLineActive {
                 Rectangle()
                     .fill(Color.accentColor)
                     .frame(height: 2)
@@ -817,7 +860,7 @@ struct SidebarItemRowContainer: View {
             }
         }
         .overlay(alignment: .bottom) {
-            if dropPosition == .below {
+            if isBottomLineActive {
                 Rectangle()
                     .fill(Color.accentColor)
                     .frame(height: 2)
@@ -834,10 +877,11 @@ struct SidebarItemRowContainer: View {
             ],
             delegate: SidebarRowDropDelegate(
                 targetItem: item,
+                itemIndex: itemIndex,
+                totalItemCount: totalItemCount,
                 targetGroupId: groupId,
                 sidebarManager: sidebarManager,
                 rowHeight: rowHeight,
-                dropPosition: $dropPosition,
                 onMoveFiles: onMoveFiles,
                 onUploadToFolder: onUploadToFolder
             )
@@ -850,10 +894,11 @@ struct SidebarItemRowContainer: View {
 
 struct SidebarRowDropDelegate: DropDelegate {
     let targetItem: QuickAccessItem
+    let itemIndex: Int
+    let totalItemCount: Int
     let targetGroupId: String
     let sidebarManager: SidebarManager
     let rowHeight: CGFloat
-    @Binding var dropPosition: DropPosition?
     let onMoveFiles: (([UnifiedFile], String) -> Void)?
     let onUploadToFolder: (([URL], String) -> Void)?
 
@@ -899,19 +944,29 @@ struct SidebarRowDropDelegate: DropDelegate {
     private func updatePosition(info: DropInfo) {
         if canReorderSidebarItem || hasDraggedBrowserFolders {
             let midY = max(rowHeight / 2, 10)
-            dropPosition = (info.location.y < midY) ? .above : .below
+            let slotIndex = (info.location.y < midY) ? itemIndex : (itemIndex + 1)
+            sidebarManager.setActiveDropSlot(SidebarDropSlot(groupId: targetGroupId, index: slotIndex))
         } else {
-            dropPosition = nil
+            sidebarManager.clearDropSlotImmediately()
         }
     }
 
     func dropExited(info: DropInfo) {
-        dropPosition = nil
+        sidebarManager.clearDropSlotDelayed()
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        let pos = dropPosition ?? .below
-        dropPosition = nil
+        let currentSlot = sidebarManager.activeDropSlot
+        sidebarManager.clearDropSlotImmediately()
+
+        let isAbove: Bool
+        if let currentSlot, currentSlot.groupId == targetGroupId {
+            isAbove = (currentSlot.index <= itemIndex)
+        } else {
+            let midY = max(rowHeight / 2, 10)
+            isAbove = (info.location.y < midY)
+        }
+        let pos: DropPosition = isAbove ? .above : .below
 
         if let dragged = SidebarDragState.shared.draggedItem {
             guard canReorderSidebarItem else {
