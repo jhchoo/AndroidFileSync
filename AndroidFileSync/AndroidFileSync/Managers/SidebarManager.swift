@@ -54,10 +54,10 @@ class SidebarManager: ObservableObject {
         quickAccessItems + groups.flatMap { $0.items.filter { !$0.isBuiltIn } }
     }
 
-    /// Visible items specifically in Quick Access
+    /// Visible items specifically in Quick Access (user-added items are always visible)
     var visibleQuickAccessItems: [QuickAccessItem] {
         quickAccessItems.filter { item in
-            !checkedPaths.contains(item.path) || existingPaths.contains(item.path)
+            !item.isBuiltIn || !checkedPaths.contains(item.path) || existingPaths.contains(item.path)
         }
     }
 
@@ -103,10 +103,10 @@ class SidebarManager: ObservableObject {
 
     // MARK: - Group Management
 
-    /// Returns visible items in a specific group that pass ADB existence checks
+    /// Returns visible items in a specific group (hides non-existent built-ins once checked; user-added items stay visible)
     func visibleItems(in group: SidebarGroup) -> [QuickAccessItem] {
         group.items.filter { item in
-            !checkedPaths.contains(item.path) || existingPaths.contains(item.path)
+            !item.isBuiltIn || !checkedPaths.contains(item.path) || existingPaths.contains(item.path)
         }
     }
 
@@ -214,8 +214,9 @@ class SidebarManager: ObservableObject {
             removedItem = groups[srcGIdx].items.remove(at: srcIdx)
         }
 
-        // 2. Insert into destination
+        // 2. Insert into destination (avoiding duplicate path in the same target group)
         if toGroupId == "quick_access" {
+            quickAccessItems.removeAll { $0.path == removedItem.path }
             let destIndex: Int
             if let targetPath = targetItemPath,
                let targetIdx = quickAccessItems.firstIndex(where: { $0.path == targetPath }) {
@@ -228,10 +229,13 @@ class SidebarManager: ObservableObject {
         } else {
             guard let dstGIdx = groups.firstIndex(where: { $0.id == toGroupId }) else {
                 // Fallback to quick access if destination group not found
-                quickAccessItems.append(removedItem)
+                if !quickAccessItems.contains(where: { $0.path == removedItem.path }) {
+                    quickAccessItems.append(removedItem)
+                }
                 save()
                 return
             }
+            groups[dstGIdx].items.removeAll { $0.path == removedItem.path }
             let destIndex: Int
             if let targetPath = targetItemPath,
                let targetIdx = groups[dstGIdx].items.firstIndex(where: { $0.path == targetPath }) {
@@ -260,42 +264,77 @@ class SidebarManager: ObservableObject {
             removedItem = groups[gIdx].items.remove(at: idx)
         }
 
-        // Add to destination
+        // Add to destination (avoiding duplicate path in the same target group)
         if toGroupId == "quick_access" {
-            quickAccessItems.append(removedItem)
+            if !quickAccessItems.contains(where: { $0.path == removedItem.path }) {
+                quickAccessItems.append(removedItem)
+            }
         } else if let dstGIdx = groups.firstIndex(where: { $0.id == toGroupId }) {
-            groups[dstGIdx].items.append(removedItem)
+            if !groups[dstGIdx].items.contains(where: { $0.path == removedItem.path }) {
+                groups[dstGIdx].items.append(removedItem)
+            }
         }
         save()
     }
 
     // MARK: - Item Mutations
 
-    func addItem(name: String, path: String, icon: String = "folder.fill", color: String = "blue", toGroupId: String? = nil) {
-        let allCurrentPaths = Set(quickAccessItems.map(\.path)).union(groups.flatMap(\.items).map(\.path))
-        guard !allCurrentPaths.contains(path) else { return }
+    /// Adds a folder shortcut to the target group (or to `selectedGroupId` if selected, or `Quick Access` if no group is selected).
+    func addItem(
+        name: String,
+        path: String,
+        icon: String = "folder.fill",
+        color: String = "blue",
+        toGroupId: String? = nil,
+        relativeTo targetItemPath: String? = nil,
+        position: DropPosition = .below
+    ) {
         let item = QuickAccessItem(name: name, icon: icon, path: path, color: color, isBuiltIn: false)
-
         let targetGid = toGroupId ?? selectedGroupId
 
         if let gid = targetGid, gid != "quick_access", let targetIdx = groups.firstIndex(where: { $0.id == gid }) {
-            groups[targetIdx].items.append(item)
+            guard !groups[targetIdx].items.contains(where: { $0.path == path }) else { return }
+            if let targetPath = targetItemPath,
+               let relIdx = groups[targetIdx].items.firstIndex(where: { $0.path == targetPath }) {
+                let insertIdx = (position == .above) ? relIdx : relIdx + 1
+                let safeIdx = max(0, min(insertIdx, groups[targetIdx].items.count))
+                groups[targetIdx].items.insert(item, at: safeIdx)
+            } else {
+                groups[targetIdx].items.append(item)
+            }
         } else {
-            // QuickAccess is dedicated for "Add to Sidebar" when no custom group is targeted
-            quickAccessItems.append(item)
+            // QuickAccess is dedicated for "Add to Sidebar" when no group is selected
+            guard !quickAccessItems.contains(where: { $0.path == path }) else { return }
+            if let targetPath = targetItemPath,
+               let relIdx = quickAccessItems.firstIndex(where: { $0.path == targetPath }) {
+                let insertIdx = (position == .above) ? relIdx : relIdx + 1
+                let safeIdx = max(0, min(insertIdx, quickAccessItems.count))
+                quickAccessItems.insert(item, at: safeIdx)
+            } else {
+                quickAccessItems.append(item)
+            }
         }
+
+        existingPaths.insert(path)
+        checkedPaths.insert(path)
         save()
-        Task { await checkExistence() }
     }
 
     func removeItem(_ item: QuickAccessItem, fromGroupId: String? = nil) {
         if item.isBuiltIn {
             let canonical = "/storage/emulated/0" + item.path.dropFirst(internalStoragePath.count)
             hiddenBuiltInPaths.insert(canonical)
-            for gIdx in groups.indices {
-                groups[gIdx].items.removeAll { $0.path == item.path }
+            if let gid = fromGroupId {
+                if gid == "quick_access" {
+                    quickAccessItems.removeAll { $0.path == item.path }
+                } else if let gIdx = groups.firstIndex(where: { $0.id == gid }) {
+                    groups[gIdx].items.removeAll { $0.path == item.path }
+                }
+            } else {
+                for gIdx in groups.indices {
+                    groups[gIdx].items.removeAll { $0.path == item.path && $0.isBuiltIn }
+                }
             }
-            quickAccessItems.removeAll { $0.path == item.path }
         } else {
             if let gid = fromGroupId {
                 if gid == "quick_access" {
@@ -309,8 +348,12 @@ class SidebarManager: ObservableObject {
                     groups[gIdx].items.removeAll { $0.path == item.path }
                 }
             }
-            existingPaths.remove(item.path)
-            checkedPaths.remove(item.path)
+            let stillExistsSomewhere = quickAccessItems.contains(where: { $0.path == item.path })
+                || groups.contains(where: { $0.items.contains(where: { $0.path == item.path }) })
+            if !stillExistsSomewhere {
+                existingPaths.remove(item.path)
+                checkedPaths.remove(item.path)
+            }
         }
         save()
     }
@@ -318,9 +361,9 @@ class SidebarManager: ObservableObject {
     func restoreBuiltIns() {
         hiddenBuiltInPaths.removeAll()
         if let defIdx = groups.firstIndex(where: { $0.isDefault }) {
-            let existingPathsInAll = Set(groups.flatMap(\.items).map(\.path)).union(quickAccessItems.map(\.path))
+            let existingPathsInDefault = Set(groups[defIdx].items.map(\.path))
             for builtIn in defaultBuiltInItems() {
-                if !existingPathsInAll.contains(builtIn.path) {
+                if !existingPathsInDefault.contains(builtIn.path) {
                     groups[defIdx].items.append(builtIn)
                 }
             }
@@ -397,7 +440,7 @@ class SidebarManager: ObservableObject {
 
     func checkExistence() async {
         let allItems = quickAccessItems + groups.flatMap(\.items)
-        let paths = allItems.map(\.path)
+        let paths = Array(Set(allItems.map(\.path)))
         let storageSnapshot = internalStoragePath
         guard !paths.isEmpty, let serial = ADBManager.activeDeviceSerial else { return }
 
@@ -407,20 +450,24 @@ class SidebarManager: ObservableObject {
         var newExisting: Set<String> = []
         var newChecked: Set<String> = []
 
-        await withTaskGroup(of: (String, Bool).self) { group in
+        await withTaskGroup(of: (String, Bool?).self) { group in
             for path in paths {
                 group.addTask {
                     let escaped = path.replacingOccurrences(of: "'", with: "'\\''")
-                    let (_, output, _) = await Shell.runAsync(
+                    let (code, output, _) = await Shell.runAsync(
                         adbPath,
                         args: ["-s", serial, "shell", "[ -d '\(escaped)' ] && echo 1 || echo 0"]
                     )
-                    let exists = output.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
-                    return (path, exists)
+                    let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard code == 0, (trimmed == "1" || trimmed == "0") else {
+                        return (path, nil)
+                    }
+                    return (path, trimmed == "1")
                 }
             }
 
             for await (path, exists) in group {
+                guard let exists else { continue }
                 newChecked.insert(path)
                 if exists { newExisting.insert(path) }
             }
@@ -429,8 +476,8 @@ class SidebarManager: ObservableObject {
         await MainActor.run {
             guard ADBManager.activeDeviceSerial == serial, self.internalStoragePath == storageSnapshot else { return }
             newExisting.insert(storageSnapshot)
-            self.existingPaths = newExisting
-            self.checkedPaths = newChecked
+            self.existingPaths.formUnion(newExisting)
+            self.checkedPaths.formUnion(newChecked)
         }
     }
 

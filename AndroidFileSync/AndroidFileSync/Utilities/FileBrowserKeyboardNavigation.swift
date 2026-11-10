@@ -72,7 +72,7 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
             removeMonitor()
             guard window != nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(
-                matching: [.keyDown, .leftMouseDown, .leftMouseDragged, .leftMouseUp]
+                matching: [.keyDown, .leftMouseDown, .leftMouseDragged, .leftMouseUp, .rightMouseDown]
             ) { [weak self] event in
                 guard let self else { return event }
                 return self.handle(event)
@@ -111,10 +111,33 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
 
         func handle(_ event: NSEvent) -> NSEvent? {
             guard isEnabled, let window, window.isKeyWindow,
-                  event.window == nil || event.window === window,
                   NSApp.modalWindow == nil, window.attachedSheet == nil else { return event }
+            if event.type != .keyDown {
+                guard event.window === window else { return event }
+            } else {
+                guard event.window == nil || event.window === window else { return event }
+            }
+
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             let point = convert(event.locationInWindow, from: nil)
+
+            if event.type == .rightMouseDown || (event.type == .leftMouseDown && flags.contains(.control)) {
+                guard bounds.contains(point) else { return event }
+                if let content = window.contentView {
+                    var target = content.hitTest(content.convert(event.locationInWindow, from: nil))
+                    while let view = target {
+                        if view is NSScroller { return event }
+                        target = view.superview
+                    }
+                }
+                if !isGrid, let table = tableView(),
+                   table.convert(point, from: self).y < 0 { return event }
+                if let index = frames().first(where: { $0.value.contains(point) })?.key,
+                   !selectedIndexes.contains(index) {
+                    onClick?(index, [])
+                }
+                return event
+            }
 
             if event.type == .leftMouseDown {
                 guard bounds.contains(point) else { return event }

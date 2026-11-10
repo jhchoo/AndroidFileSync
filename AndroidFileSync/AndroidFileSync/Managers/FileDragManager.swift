@@ -138,7 +138,7 @@ final class FileDragManager: NSObject, ObservableObject, NSDraggingSource {
         case .outsideApplication:
             return .copy
         case .withinApplication:
-            return .move
+            return [.copy, .move]
         @unknown default:
             return [.copy, .move]
         }
