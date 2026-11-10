@@ -994,6 +994,11 @@ final class PDFPreviewCoordinator: ObservableObject {
             let clamped = max(pdfView.minScaleFactor, min(pdfView.maxScaleFactor, targetScale))
             pdfView.scaleFactor = clamped
             self.scaleFactor = clamped
+            pdfView.layoutDocumentView()
+            centerHorizontalScrollIfNeeded()
+            DispatchQueue.main.async { [weak self] in
+                self?.centerHorizontalScrollIfNeeded()
+            }
         }
     }
 
@@ -1007,6 +1012,33 @@ final class PDFPreviewCoordinator: ObservableObject {
             let clamped = max(pdfView.minScaleFactor, min(pdfView.maxScaleFactor, targetScale))
             pdfView.scaleFactor = clamped
             self.scaleFactor = clamped
+            pdfView.layoutDocumentView()
+            centerHorizontalScrollIfNeeded()
+            DispatchQueue.main.async { [weak self] in
+                self?.centerHorizontalScrollIfNeeded()
+            }
+        }
+    }
+
+    /// 가로맞춤 / 세로맞춤 시 하단에 가로스크롤바가 존재하면 중앙으로 이동
+    func centerHorizontalScrollIfNeeded() {
+        guard let pdfView = currentPDFView else { return }
+        guard let scrollView = findScrollView(in: pdfView) else { return }
+        let clipView = scrollView.contentView
+        guard let docView = clipView.documentView else { return }
+
+        let docWidth = max(docView.bounds.width, docView.frame.width)
+        let clipWidth = clipView.bounds.width
+        let maxScrollX = docWidth - clipWidth
+
+        // 하단 가로스크롤바가 존재하는 경우(문서 너비가 뷰포트 너비보다 큰 경우) 중앙으로 스크롤 이동
+        if maxScrollX > 1.0 {
+            var origin = clipView.bounds.origin
+            let minX = docView.bounds.origin.x
+            origin.x = minX + (maxScrollX / 2.0)
+            clipView.scroll(to: origin)
+            scrollView.reflectScrolledClipView(clipView)
+            saveCurrentLocation()
         }
     }
 }

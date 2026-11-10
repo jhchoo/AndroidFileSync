@@ -14,7 +14,7 @@ final class SidebarDragState: NSObject, NSDraggingSource {
     var currentPath: String = ""
     var hasActiveAppFilter: Bool = false
 
-    var onSelectFolder: ((String, String) -> Void)? = nil
+    var onSelectFolder: ((String, QuickAccessItem) -> Void)? = nil
     var onSelectApps: (() -> Void)? = nil
     var onItemMovedToGroup: ((String, String) -> Void)? = nil
 
@@ -155,7 +155,7 @@ final class SidebarDragState: NSObject, NSDraggingSource {
                     if groupId == "__apps__" {
                         onSelectApps?()
                     } else if let item {
-                        onSelectFolder?(groupId, item.path)
+                        onSelectFolder?(groupId, item)
                     }
                 } else if let upView = hitTestRowView(windowPoint: event.locationInWindow, in: window),
                           upView.groupId == groupId,
@@ -163,7 +163,7 @@ final class SidebarDragState: NSObject, NSDraggingSource {
                     if groupId == "__apps__" {
                         onSelectApps?()
                     } else if let item {
-                        onSelectFolder?(groupId, item.path)
+                        onSelectFolder?(groupId, item)
                     }
                 }
             }
@@ -322,7 +322,7 @@ final class SidebarRowTrackingNSView: NSView {
 struct SidebarRowHitTracker: NSViewRepresentable {
     let groupId: String
     let item: QuickAccessItem?
-    let onSelectFolder: (String, String) -> Void
+    let onSelectFolder: (String, QuickAccessItem) -> Void
     let onSelectApps: (() -> Void)?
     let onItemMovedToGroup: (String, String) -> Void
 
@@ -367,6 +367,8 @@ struct SidebarView: View {
 
     @State private var groupToDelete: SidebarGroup? = nil
     @State private var showDeleteGroupAlert = false
+    @State private var missingItemInfo: (groupId: String, item: QuickAccessItem)? = nil
+    @State private var showMissingPathAlert = false
     @State private var isAddGroupHovered = false
     @State private var isQuickAccessHeaderTargeted = false
     @State private var activeSelectionGroupId: String? = nil
@@ -402,12 +404,24 @@ struct SidebarView: View {
         return "default"
     }
 
-    private func selectFolder(groupId: String, path: String) {
-        activeSelectionGroupId = groupId
-        guard SidebarDragState.shared.currentPath != path || SidebarDragState.shared.hasActiveAppFilter else { return }
-        SidebarDragState.shared.currentPath = path
-        SidebarDragState.shared.hasActiveAppFilter = false
-        onNavigate(path)
+    private func selectFolder(groupId: String, item: QuickAccessItem) {
+        Task {
+            let exists = await sidebarManager.checkPathExists(item.path)
+            if !exists {
+                await MainActor.run {
+                    missingItemInfo = (groupId: groupId, item: item)
+                    showMissingPathAlert = true
+                }
+                return
+            }
+            await MainActor.run {
+                activeSelectionGroupId = groupId
+                guard SidebarDragState.shared.currentPath != item.path || SidebarDragState.shared.hasActiveAppFilter else { return }
+                SidebarDragState.shared.currentPath = item.path
+                SidebarDragState.shared.hasActiveAppFilter = false
+                onNavigate(item.path)
+            }
+        }
     }
 
     private func handleItemMovedToGroup(itemPath: String, targetGroupId: String) {
@@ -425,7 +439,13 @@ struct SidebarView: View {
             guard let val = newValue else { return }
             switch val {
             case .folder(let groupId, let path):
-                selectFolder(groupId: groupId, path: path)
+                let allItems = sidebarManager.quickAccessItems + sidebarManager.groups.flatMap(\.items)
+                if let item = allItems.first(where: { $0.path == path }) {
+                    selectFolder(groupId: groupId, item: item)
+                } else {
+                    let fallback = QuickAccessItem(name: (path as NSString).lastPathComponent, icon: "folder.fill", path: path, color: "blue", isBuiltIn: false)
+                    selectFolder(groupId: groupId, item: fallback)
+                }
             case .apps:
                 SidebarDragState.shared.hasActiveAppFilter = true
                 onSelectAppFilter?(.user)
@@ -667,6 +687,23 @@ struct SidebarView: View {
         } message: {
             Text("Are you sure you want to delete '\(groupToDelete?.name ?? "")'?")
         }
+        .alert("경로가 존재하지 않음", isPresented: $showMissingPathAlert) {
+            Button("취소", role: .cancel) {
+                missingItemInfo = nil
+            }
+            Button("확인", role: .destructive) {
+                if let info = missingItemInfo {
+                    sidebarManager.removeItem(info.item, fromGroupId: info.groupId)
+                    missingItemInfo = nil
+                }
+            }
+        } message: {
+            if let info = missingItemInfo {
+                Text("'\(info.item.name)' 경로가 존재하지 않습니다.\n삭제하시겠습니까?")
+            } else {
+                Text("경로가 존재하지 않습니다.\n삭제하시겠습니까?")
+            }
+        }
         .onChange(of: currentPath) { newValue in
             SidebarDragState.shared.currentPath = newValue
             SidebarDragState.shared.onSelectFolder = selectFolder
@@ -730,7 +767,7 @@ struct SidebarItemRowContainer: View {
     let groupId: String
     @ObservedObject var sidebarManager: SidebarManager
     let storageStats: [String: DeviceManager.StorageInfo]
-    let onSelectFolder: (String, String) -> Void
+    let onSelectFolder: (String, QuickAccessItem) -> Void
     let onSelectApps: (() -> Void)?
     let onItemMovedToGroup: (String, String) -> Void
     let onMoveFiles: (([UnifiedFile], String) -> Void)?

@@ -213,6 +213,13 @@ class FileActionManager: ObservableObject {
         if permanent {
             // Process permanent deletes in batch (chunks of 20) via single rm -rf commands to prevent ADB command flooding
             let pathsToDelete = files.map { $0.path }
+            await MainActor.run {
+                NotificationCenter.default.post(
+                    name: .afsItemsDeleted,
+                    object: nil,
+                    userInfo: ["paths": pathsToDelete]
+                )
+            }
             
             // Build a mapping from file path to LiveDeletion ID
             var pathMap: [String: UUID] = [:]
@@ -663,7 +670,15 @@ class FileActionManager: ObservableObject {
 
         do {
             try await ADBManager.renameFile(oldPath: file.path, newPath: newPath)
-            await MainActor.run { isPerformingAction = false; currentAction = "" }
+            await MainActor.run {
+                isPerformingAction = false
+                currentAction = ""
+                NotificationCenter.default.post(
+                    name: .afsFolderRenamed,
+                    object: nil,
+                    userInfo: ["oldPath": file.path, "newPath": newPath, "newName": trimmed]
+                )
+            }
         } catch {
             let formattedError = NSError(
                 domain: "Rename",
@@ -1041,14 +1056,42 @@ class FileActionManager: ObservableObject {
             if code == 0 {
                 successCount = items.count
                 successPaths = items.map { $0.dest }
+                await MainActor.run {
+                    for (file, destFile) in items {
+                        let destNorm = destFile.precomposedStringWithCanonicalMapping
+                        let newName = (destNorm as NSString).lastPathComponent
+                        NotificationCenter.default.post(
+                            name: .afsFolderRenamed,
+                            object: nil,
+                            userInfo: [
+                                "oldPath": file.path,
+                                "newPath": destNorm,
+                                "newName": newName
+                            ]
+                        )
+                    }
+                }
             } else {
                 // Batch failed — fall back to individual moves to identify which ones failed
                 print("⚠️ Batch move failed (code \(code)): \(error) — retrying individually")
                 for (file, destFile) in items {
                     do {
                         try await ADBManager.renameFile(oldPath: file.path, newPath: destFile)
-                        successPaths.append(destFile)
+                        let destNorm = destFile.precomposedStringWithCanonicalMapping
+                        successPaths.append(destNorm)
                         successCount += 1
+                        await MainActor.run {
+                            let newName = (destNorm as NSString).lastPathComponent
+                            NotificationCenter.default.post(
+                                name: .afsFolderRenamed,
+                                object: nil,
+                                userInfo: [
+                                    "oldPath": file.path,
+                                    "newPath": destNorm,
+                                    "newName": newName
+                                ]
+                            )
+                        }
                     } catch {
                         print("\u{274C} Failed to paste \(file.name): \(error.localizedDescription)")
                         failedItems.append((file.name, error.localizedDescription))
@@ -1260,13 +1303,41 @@ class FileActionManager: ObservableObject {
         if code == 0 {
             successCount = items.count
             successPaths = items.map { $0.dest.precomposedStringWithCanonicalMapping }
+            await MainActor.run {
+                for (file, destFile) in items {
+                    let destNorm = destFile.precomposedStringWithCanonicalMapping
+                    let newName = (destNorm as NSString).lastPathComponent
+                    NotificationCenter.default.post(
+                        name: .afsFolderRenamed,
+                        object: nil,
+                        userInfo: [
+                            "oldPath": file.path,
+                            "newPath": destNorm,
+                            "newName": newName
+                        ]
+                    )
+                }
+            }
         } else {
             // Batch failed — fall back to individual moves
             for (file, destFile) in items {
                 do {
                     try await ADBManager.renameFile(oldPath: file.path, newPath: destFile)
-                    successPaths.append(destFile.precomposedStringWithCanonicalMapping)
+                    let destNorm = destFile.precomposedStringWithCanonicalMapping
+                    successPaths.append(destNorm)
                     successCount += 1
+                    await MainActor.run {
+                        let newName = (destNorm as NSString).lastPathComponent
+                        NotificationCenter.default.post(
+                            name: .afsFolderRenamed,
+                            object: nil,
+                            userInfo: [
+                                "oldPath": file.path,
+                                "newPath": destNorm,
+                                "newName": newName
+                            ]
+                        )
+                    }
                 } catch {
                     failedItems.append((file.name, error.localizedDescription))
                 }

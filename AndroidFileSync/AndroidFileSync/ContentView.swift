@@ -550,6 +550,13 @@ struct ContentView: View {
                     }
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .afsFolderRenamed)) { notification in
+                if let userInfo = notification.userInfo,
+                   let oldPath = userInfo["oldPath"] as? String,
+                   let newPath = userInfo["newPath"] as? String {
+                    updatePathsAfterFolderMovedOrRenamed(oldPath: oldPath, newPath: newPath)
+                }
+            }
             .sheet(item: $infoFile, onDismiss: {
                 fileInfoTask?.cancel()
                 fileInfoTask = nil
@@ -1665,6 +1672,8 @@ struct ContentView: View {
         guard !targets.isEmpty else { return }
 
         let deletedIDs = Set(targets.map { $0.id })
+        let deletedPaths = targets.map { $0.path }
+        sidebarManager.handleItemsDeleted(paths: deletedPaths)
         secondaryFiles.removeAll { deletedIDs.contains($0.id) }
         secondarySelectedFiles.subtract(deletedIDs)
 
@@ -2486,6 +2495,14 @@ struct ContentView: View {
         Task {
             do {
                 try await fileActionManager.moveFiles(files, to: destination)
+                await MainActor.run {
+                    let destClean = destination.hasSuffix("/") ? String(destination.dropLast()) : destination
+                    for file in files {
+                        let newPath = "\(destClean)/\(file.name)"
+                        sidebarManager.handleItemRenamed(oldPath: file.path, newPath: newPath, newName: file.name)
+                        updatePathsAfterFolderMovedOrRenamed(oldPath: file.path, newPath: newPath)
+                    }
+                }
             } catch {
                 AppLogger.log("❌ [handleMoveFiles] Move failed: \(error.localizedDescription)", level: .error)
                 presentFileOperationError(error)
@@ -2742,10 +2759,55 @@ struct ContentView: View {
         }
     }
     
+    private func updatePathsAfterFolderMovedOrRenamed(oldPath: String, newPath: String) {
+        if currentPath == oldPath {
+            currentPath = newPath
+        } else if currentPath.hasPrefix(oldPath + "/") {
+            currentPath = newPath + currentPath.dropFirst(oldPath.count)
+        }
+        pathHistory = pathHistory.map { p in
+            if p == oldPath { return newPath }
+            if p.hasPrefix(oldPath + "/") { return newPath + p.dropFirst(oldPath.count) }
+            return p
+        }
+        forwardHistory = forwardHistory.map { p in
+            if p == oldPath { return newPath }
+            if p.hasPrefix(oldPath + "/") { return newPath + p.dropFirst(oldPath.count) }
+            return p
+        }
+        if isDualPaneEnabled {
+            if secondaryPath == oldPath {
+                secondaryPath = newPath
+            } else if secondaryPath.hasPrefix(oldPath + "/") {
+                secondaryPath = newPath + secondaryPath.dropFirst(oldPath.count)
+            }
+            secondaryPathHistory = secondaryPathHistory.map { p in
+                if p == oldPath { return newPath }
+                if p.hasPrefix(oldPath + "/") { return newPath + p.dropFirst(oldPath.count) }
+                return p
+            }
+            secondaryForwardHistory = secondaryForwardHistory.map { p in
+                if p == oldPath { return newPath }
+                if p.hasPrefix(oldPath + "/") { return newPath + p.dropFirst(oldPath.count) }
+                return p
+            }
+        }
+    }
+
     private func handleRename(_ file: UnifiedFile, newName: String) {
+        let trimmedName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, trimmedName != file.name else { return }
+        let parentPath = (file.path as NSString).deletingLastPathComponent
+        let newPath = parentPath + "/" + trimmedName
+
         Task {
             do {
-                try await fileActionManager.renameFile(file, to: newName)
+                try await fileActionManager.renameFile(file, to: trimmedName)
+
+                await MainActor.run {
+                    sidebarManager.handleItemRenamed(oldPath: file.path, newPath: newPath, newName: trimmedName)
+                    updatePathsAfterFolderMovedOrRenamed(oldPath: file.path, newPath: newPath)
+                }
                 
                 // Invalidate cache and refresh
                 ADBManager.invalidateFolderSizeCache()
@@ -2769,6 +2831,8 @@ struct ContentView: View {
         guard !filesToDelete.isEmpty else { return }
         
         let deletedIDs = Set(filesToDelete.map { $0.id })
+        let deletedPaths = filesToDelete.map { $0.path }
+        sidebarManager.handleItemsDeleted(paths: deletedPaths)
         files.removeAll { deletedIDs.contains($0.id) }
         selectedFiles.removeAll()
         
@@ -2792,6 +2856,8 @@ struct ContentView: View {
         guard !targets.isEmpty else { return }
         
         let deletedIDs = Set(targets.map { $0.id })
+        let deletedPaths = targets.map { $0.path }
+        sidebarManager.handleItemsDeleted(paths: deletedPaths)
         files.removeAll { deletedIDs.contains($0.id) }
         selectedFiles.subtract(deletedIDs)
         

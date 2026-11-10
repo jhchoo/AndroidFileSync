@@ -13,6 +13,8 @@ extension Notification.Name {
     static let afsDeletionsChanged = Notification.Name("afsDeletionsChanged")
     static let afsMouseNavigateBack = Notification.Name("afsMouseNavigateBack")
     static let afsMouseNavigateForward = Notification.Name("afsMouseNavigateForward")
+    static let afsFolderRenamed = Notification.Name("afsFolderRenamed")
+    static let afsItemsDeleted = Notification.Name("afsItemsDeleted")
 } 
 
 @main
@@ -314,7 +316,6 @@ struct ConnectionBadge: View {
                     .font(.caption)
             case .wireless:
                 Image(systemName: "wifi")
-                Text("WiFi")
                     .font(.caption)
             case .none:
                 Image(systemName: "xmark.circle")

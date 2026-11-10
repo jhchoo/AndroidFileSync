@@ -82,6 +82,30 @@ class SidebarManager: ObservableObject {
 
     init() {
         load()
+
+        NotificationCenter.default.addObserver(
+            forName: .afsFolderRenamed,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self,
+                  let userInfo = note.userInfo,
+                  let oldPath = userInfo["oldPath"] as? String,
+                  let newPath = userInfo["newPath"] as? String,
+                  let newName = userInfo["newName"] as? String else { return }
+            self.handleItemRenamed(oldPath: oldPath, newPath: newPath, newName: newName)
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .afsItemsDeleted,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self,
+                  let userInfo = note.userInfo,
+                  let paths = userInfo["paths"] as? [String] else { return }
+            self.handleItemsDeleted(paths: paths)
+        }
     }
 
     // MARK: - Default Built-in Generator
@@ -468,7 +492,209 @@ class SidebarManager: ObservableObject {
         save()
     }
 
+    // MARK: - Folder Rename & Delete Synchronization
+
+    /// Updates sidebar items when a folder is renamed or moved.
+    func handleItemRenamed(oldPath: String, newPath: String, newName: String) {
+        var changed = false
+
+        func normalize(_ p: String) -> String {
+            var s = p.precomposedStringWithCanonicalMapping
+            while s.contains("//") {
+                s = s.replacingOccurrences(of: "//", with: "/")
+            }
+            while s.hasSuffix("/") && s.count > 1 {
+                s.removeLast()
+            }
+            if s.hasPrefix("/sdcard/") {
+                return "/storage/emulated/0/" + s.dropFirst("/sdcard/".count)
+            } else if s == "/sdcard" {
+                return "/storage/emulated/0"
+            }
+            return s
+        }
+
+        let normOld = normalize(oldPath)
+        let normNew = normalize(newPath)
+        let oldLastComponent = (normOld as NSString).lastPathComponent
+        let newLastComponent = (normNew as NSString).lastPathComponent
+        let cleanNewName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        func updateItemIfNeeded(_ item: QuickAccessItem) -> QuickAccessItem? {
+            let itemNorm = normalize(item.path)
+            if itemNorm == normOld {
+                let nameToUse: String
+                if !cleanNewName.isEmpty && cleanNewName != oldLastComponent {
+                    // Explicitly renamed
+                    nameToUse = cleanNewName
+                } else if item.name == oldLastComponent && !newLastComponent.isEmpty {
+                    // Default folder name
+                    nameToUse = newLastComponent
+                } else if !cleanNewName.isEmpty {
+                    nameToUse = cleanNewName
+                } else {
+                    nameToUse = item.name
+                }
+                return QuickAccessItem(
+                    name: nameToUse,
+                    icon: item.icon,
+                    path: normNew,
+                    color: item.color,
+                    isBuiltIn: item.isBuiltIn
+                )
+            } else if itemNorm.hasPrefix(normOld + "/") {
+                let suffix = itemNorm.dropFirst(normOld.count)
+                let sub = normNew + suffix
+                return QuickAccessItem(
+                    name: item.name,
+                    icon: item.icon,
+                    path: sub,
+                    color: item.color,
+                    isBuiltIn: item.isBuiltIn
+                )
+            }
+            return nil
+        }
+
+        // 1. Quick Access items
+        for idx in quickAccessItems.indices {
+            if let updated = updateItemIfNeeded(quickAccessItems[idx]) {
+                quickAccessItems[idx] = updated
+                changed = true
+            }
+        }
+
+        // 2. Groups
+        for gIdx in groups.indices {
+            for iIdx in groups[gIdx].items.indices {
+                if let updated = updateItemIfNeeded(groups[gIdx].items[iIdx]) {
+                    groups[gIdx].items[iIdx] = updated
+                    changed = true
+                }
+            }
+        }
+
+        if changed {
+            let matchingExisting = existingPaths.filter { normalize($0) == normOld || normalize($0).hasPrefix(normOld + "/") }
+            for p in matchingExisting {
+                existingPaths.remove(p)
+                let suffix = normalize(p).dropFirst(normOld.count)
+                existingPaths.insert(normNew + suffix)
+            }
+            existingPaths.insert(normNew)
+
+            let matchingChecked = checkedPaths.filter { normalize($0) == normOld || normalize($0).hasPrefix(normOld + "/") }
+            for p in matchingChecked {
+                checkedPaths.remove(p)
+                let suffix = normalize(p).dropFirst(normOld.count)
+                checkedPaths.insert(normNew + suffix)
+            }
+            checkedPaths.insert(normNew)
+            save()
+        }
+    }
+
+    /// Removes folders from sidebar when deleted.
+    func handleItemsDeleted(paths: [String]) {
+        guard !paths.isEmpty else { return }
+
+        func normalize(_ p: String) -> String {
+            var s = p.precomposedStringWithCanonicalMapping
+            while s.contains("//") {
+                s = s.replacingOccurrences(of: "//", with: "/")
+            }
+            while s.hasSuffix("/") && s.count > 1 {
+                s.removeLast()
+            }
+            if s.hasPrefix("/sdcard/") {
+                return "/storage/emulated/0/" + s.dropFirst("/sdcard/".count)
+            } else if s == "/sdcard" {
+                return "/storage/emulated/0"
+            }
+            return s
+        }
+
+        let normalizedDeleted = Set(paths.map { normalize($0) })
+        let pathSet = Set(paths)
+
+        func isDeleted(_ itemPath: String) -> Bool {
+            let itemNorm = normalize(itemPath)
+            if pathSet.contains(itemPath) || normalizedDeleted.contains(itemNorm) {
+                return true
+            }
+            for del in pathSet {
+                if itemPath.hasPrefix(del + "/") { return true }
+            }
+            for delNorm in normalizedDeleted {
+                if itemNorm.hasPrefix(delNorm + "/") { return true }
+            }
+            return false
+        }
+
+        var changed = false
+
+        // 1. Quick Access
+        let origQACount = quickAccessItems.count
+        quickAccessItems.removeAll { isDeleted($0.path) }
+        if quickAccessItems.count != origQACount {
+            changed = true
+        }
+
+        // 2. Groups
+        for gIdx in groups.indices {
+            let origCount = groups[gIdx].items.count
+            for item in groups[gIdx].items where isDeleted(item.path) && item.isBuiltIn {
+                let canonical = "/storage/emulated/0" + item.path.dropFirst(internalStoragePath.count)
+                hiddenBuiltInPaths.insert(canonical)
+            }
+            groups[gIdx].items.removeAll { isDeleted($0.path) }
+            if groups[gIdx].items.count != origCount {
+                changed = true
+            }
+        }
+
+        if changed {
+            for p in paths {
+                existingPaths.remove(p)
+                checkedPaths.remove(p)
+                let norm = normalize(p)
+                existingPaths.remove(norm)
+                checkedPaths.remove(norm)
+            }
+            save()
+        }
+    }
+
     // MARK: - Existence Checking
+
+    /// Checks if a single path exists on the active device. Returns false only when ADB confirms it doesn't exist.
+    func checkPathExists(_ path: String) async -> Bool {
+        guard let serial = ADBManager.activeDeviceSerial else { return true }
+        let adbPath = ADBManager.getADBPath()
+        guard !adbPath.isEmpty else { return true }
+
+        let escaped = path.replacingOccurrences(of: "'", with: "'\\''")
+        let (code, output, _) = await Shell.runAsync(
+            adbPath,
+            args: ["-s", serial, "shell", "[ -d '\(escaped)' ] || [ -e '\(escaped)' ] && echo 1 || echo 0"]
+        )
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if code == 0 && trimmed == "0" {
+            await MainActor.run {
+                self.existingPaths.remove(path)
+                self.checkedPaths.insert(path)
+            }
+            return false
+        }
+        if code == 0 && trimmed == "1" {
+            await MainActor.run {
+                self.existingPaths.insert(path)
+                self.checkedPaths.insert(path)
+            }
+            return true
+        }
+        return true
+    }
 
     func checkExistence() async {
         let allItems = quickAccessItems + groups.flatMap(\.items)
