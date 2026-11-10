@@ -31,9 +31,6 @@ class SidebarManager: ObservableObject {
     /// Sidebar groups (Default group "기본그룹" + user custom groups)
     @Published var groups: [SidebarGroup] = []
 
-    /// Currently selected group ID for targeting operations like "Add to Sidebar"
-    @Published var selectedGroupId: String? = nil
-
     /// Paths of built-in items the user has hidden
     @Published var hiddenBuiltInPaths: Set<String> = []
 
@@ -134,20 +131,7 @@ class SidebarManager: ObservableObject {
         guard let idx = groups.firstIndex(where: { $0.id == id }) else { return }
         guard !groups[idx].isDefault else { return } // Default group cannot be deleted
 
-        let itemsToKeep = groups[idx].items
         groups.remove(at: idx)
-
-        // Move remaining items into default group so they aren't lost
-        if !itemsToKeep.isEmpty, let defIdx = groups.firstIndex(where: { $0.isDefault }) {
-            for item in itemsToKeep {
-                if !groups[defIdx].items.contains(where: { $0.path == item.path }) {
-                    groups[defIdx].items.append(item)
-                }
-            }
-        }
-        if selectedGroupId == id {
-            selectedGroupId = nil
-        }
         sortCustomGroups()
         save()
     }
@@ -165,12 +149,13 @@ class SidebarManager: ObservableObject {
     // MARK: - Target Groups Options for Context Menu
 
     func availableTargetGroups(currentGroupId: String) -> [TargetGroupOption] {
+        // Default group ("기본그룹") does not accept user custom folders
+        if let def = defaultGroup, def.id == currentGroupId {
+            return []
+        }
         var options: [TargetGroupOption] = []
         if currentGroupId != "quick_access" {
             options.append(TargetGroupOption(id: "quick_access", name: "Quick Access"))
-        }
-        if let def = defaultGroup, def.id != currentGroupId {
-            options.append(TargetGroupOption(id: def.id, name: def.name))
         }
         for grp in customGroups where grp.id != currentGroupId {
             options.append(TargetGroupOption(id: grp.id, name: grp.name))
@@ -181,13 +166,17 @@ class SidebarManager: ObservableObject {
     // MARK: - Item Reordering & Moving
 
     func moveQuickAccessItems(fromOffsets: IndexSet, toOffset: Int) {
-        quickAccessItems.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        var updated = quickAccessItems
+        updated.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        quickAccessItems = updated
         save()
     }
 
     func moveItems(inGroupId groupId: String, fromOffsets: IndexSet, toOffset: Int) {
         guard let idx = groups.firstIndex(where: { $0.id == groupId }) else { return }
-        groups[idx].items.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        var updatedGroups = groups
+        updatedGroups[idx].items.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        groups = updatedGroups
         save()
     }
 
@@ -203,83 +192,121 @@ class SidebarManager: ObservableObject {
             return
         }
 
+        // Prevent moving built-in items out of 기본그룹, or moving custom items into 기본그룹
+        let isFromDefault = groups.first(where: { $0.id == fromGroupId })?.isDefault == true
+        let isToDefault = groups.first(where: { $0.id == toGroupId })?.isDefault == true
+        if isFromDefault != isToDefault {
+            return
+        }
+        if isToDefault && !item.isBuiltIn && item.icon != "sdcard.fill" {
+            return
+        }
+
+        var updatedQA = quickAccessItems
+        var updatedGroups = groups
+
         // 1. Remove from source
         let removedItem: QuickAccessItem
         if fromGroupId == "quick_access" {
-            guard let srcIdx = quickAccessItems.firstIndex(where: { $0.path == item.path }) else { return }
-            removedItem = quickAccessItems.remove(at: srcIdx)
+            guard let srcIdx = updatedQA.firstIndex(where: { $0.path == item.path }) else { return }
+            removedItem = updatedQA.remove(at: srcIdx)
         } else {
-            guard let srcGIdx = groups.firstIndex(where: { $0.id == fromGroupId }),
-                  let srcIdx = groups[srcGIdx].items.firstIndex(where: { $0.path == item.path }) else { return }
-            removedItem = groups[srcGIdx].items.remove(at: srcIdx)
+            guard let srcGIdx = updatedGroups.firstIndex(where: { $0.id == fromGroupId }),
+                  let srcIdx = updatedGroups[srcGIdx].items.firstIndex(where: { $0.path == item.path }) else { return }
+            removedItem = updatedGroups[srcGIdx].items.remove(at: srcIdx)
         }
 
         // 2. Insert into destination (avoiding duplicate path in the same target group)
         if toGroupId == "quick_access" {
-            quickAccessItems.removeAll { $0.path == removedItem.path }
+            updatedQA.removeAll { $0.path == removedItem.path }
             let destIndex: Int
             if let targetPath = targetItemPath,
-               let targetIdx = quickAccessItems.firstIndex(where: { $0.path == targetPath }) {
+               let targetIdx = updatedQA.firstIndex(where: { $0.path == targetPath }) {
                 destIndex = (position == .above) ? targetIdx : targetIdx + 1
             } else {
-                destIndex = quickAccessItems.count
+                destIndex = updatedQA.count
             }
-            let safeIndex = max(0, min(destIndex, quickAccessItems.count))
-            quickAccessItems.insert(removedItem, at: safeIndex)
+            let safeIndex = max(0, min(destIndex, updatedQA.count))
+            updatedQA.insert(removedItem, at: safeIndex)
         } else {
-            guard let dstGIdx = groups.firstIndex(where: { $0.id == toGroupId }) else {
-                // Fallback to quick access if destination group not found
-                if !quickAccessItems.contains(where: { $0.path == removedItem.path }) {
-                    quickAccessItems.append(removedItem)
+            guard let dstGIdx = updatedGroups.firstIndex(where: { $0.id == toGroupId }) else {
+                if !updatedQA.contains(where: { $0.path == removedItem.path }) {
+                    updatedQA.append(removedItem)
                 }
+                quickAccessItems = updatedQA
+                groups = updatedGroups
                 save()
                 return
             }
-            groups[dstGIdx].items.removeAll { $0.path == removedItem.path }
+            updatedGroups[dstGIdx].items.removeAll { $0.path == removedItem.path }
             let destIndex: Int
             if let targetPath = targetItemPath,
-               let targetIdx = groups[dstGIdx].items.firstIndex(where: { $0.path == targetPath }) {
+               let targetIdx = updatedGroups[dstGIdx].items.firstIndex(where: { $0.path == targetPath }) {
                 destIndex = (position == .above) ? targetIdx : targetIdx + 1
             } else {
-                destIndex = groups[dstGIdx].items.count
+                destIndex = updatedGroups[dstGIdx].items.count
             }
-            let safeIndex = max(0, min(destIndex, groups[dstGIdx].items.count))
-            groups[dstGIdx].items.insert(removedItem, at: safeIndex)
+            let safeIndex = max(0, min(destIndex, updatedGroups[dstGIdx].items.count))
+            updatedGroups[dstGIdx].items.insert(removedItem, at: safeIndex)
         }
 
+        // Assign atomically so SwiftUI processes a single move update instead of delete + insert
+        if updatedQA != quickAccessItems {
+            quickAccessItems = updatedQA
+        }
+        if updatedGroups != groups {
+            groups = updatedGroups
+        }
         save()
     }
 
     func moveItemToGroup(_ item: QuickAccessItem, fromGroupId: String, toGroupId: String) {
         guard fromGroupId != toGroupId else { return }
+        guard !item.isBuiltIn else { return }
+        // Prevent moving custom items into 기본그룹
+        if let dstGroup = groups.first(where: { $0.id == toGroupId }), dstGroup.isDefault {
+            return
+        }
+
+        var updatedQA = quickAccessItems
+        var updatedGroups = groups
 
         // Remove from source
         let removedItem: QuickAccessItem
         if fromGroupId == "quick_access" {
-            guard let idx = quickAccessItems.firstIndex(where: { $0.path == item.path }) else { return }
-            removedItem = quickAccessItems.remove(at: idx)
+            guard let idx = updatedQA.firstIndex(where: { $0.path == item.path }) else { return }
+            removedItem = updatedQA.remove(at: idx)
         } else {
-            guard let gIdx = groups.firstIndex(where: { $0.id == fromGroupId }),
-                  let idx = groups[gIdx].items.firstIndex(where: { $0.path == item.path }) else { return }
-            removedItem = groups[gIdx].items.remove(at: idx)
+            guard let gIdx = updatedGroups.firstIndex(where: { $0.id == fromGroupId }),
+                  !updatedGroups[gIdx].isDefault,
+                  let idx = updatedGroups[gIdx].items.firstIndex(where: { $0.path == item.path }) else { return }
+            removedItem = updatedGroups[gIdx].items.remove(at: idx)
         }
 
         // Add to destination (avoiding duplicate path in the same target group)
         if toGroupId == "quick_access" {
-            if !quickAccessItems.contains(where: { $0.path == removedItem.path }) {
-                quickAccessItems.append(removedItem)
+            if !updatedQA.contains(where: { $0.path == removedItem.path }) {
+                updatedQA.append(removedItem)
             }
-        } else if let dstGIdx = groups.firstIndex(where: { $0.id == toGroupId }) {
-            if !groups[dstGIdx].items.contains(where: { $0.path == removedItem.path }) {
-                groups[dstGIdx].items.append(removedItem)
+        } else if let dstGIdx = updatedGroups.firstIndex(where: { $0.id == toGroupId }), !updatedGroups[dstGIdx].isDefault {
+            if !updatedGroups[dstGIdx].items.contains(where: { $0.path == removedItem.path }) {
+                updatedGroups[dstGIdx].items.append(removedItem)
             }
+        }
+
+        if updatedQA != quickAccessItems {
+            quickAccessItems = updatedQA
+        }
+        if updatedGroups != groups {
+            groups = updatedGroups
         }
         save()
     }
 
     // MARK: - Item Mutations
 
-    /// Adds a folder shortcut to the target group (or to `selectedGroupId` if selected, or `Quick Access` if no group is selected).
+    /// Adds a folder shortcut to `Quick Access` by default, or to a custom group when `toGroupId` is specified.
+    /// Custom folders cannot be added to `기본그룹` (`isDefault == true`).
     func addItem(
         name: String,
         path: String,
@@ -290,29 +317,34 @@ class SidebarManager: ObservableObject {
         position: DropPosition = .below
     ) {
         let item = QuickAccessItem(name: name, icon: icon, path: path, color: color, isBuiltIn: false)
-        let targetGid = toGroupId ?? selectedGroupId
 
-        if let gid = targetGid, gid != "quick_access", let targetIdx = groups.firstIndex(where: { $0.id == gid }) {
+        if let gid = toGroupId, gid != "quick_access" {
+            guard let targetIdx = groups.firstIndex(where: { $0.id == gid }),
+                  !groups[targetIdx].isDefault else { return }
             guard !groups[targetIdx].items.contains(where: { $0.path == path }) else { return }
+            var updatedGroups = groups
             if let targetPath = targetItemPath,
-               let relIdx = groups[targetIdx].items.firstIndex(where: { $0.path == targetPath }) {
+               let relIdx = updatedGroups[targetIdx].items.firstIndex(where: { $0.path == targetPath }) {
                 let insertIdx = (position == .above) ? relIdx : relIdx + 1
-                let safeIdx = max(0, min(insertIdx, groups[targetIdx].items.count))
-                groups[targetIdx].items.insert(item, at: safeIdx)
+                let safeIdx = max(0, min(insertIdx, updatedGroups[targetIdx].items.count))
+                updatedGroups[targetIdx].items.insert(item, at: safeIdx)
             } else {
-                groups[targetIdx].items.append(item)
+                updatedGroups[targetIdx].items.append(item)
             }
+            groups = updatedGroups
         } else {
-            // QuickAccess is dedicated for "Add to Sidebar" when no group is selected
+            // QuickAccess is dedicated for "Add to Sidebar"
             guard !quickAccessItems.contains(where: { $0.path == path }) else { return }
+            var updatedQA = quickAccessItems
             if let targetPath = targetItemPath,
-               let relIdx = quickAccessItems.firstIndex(where: { $0.path == targetPath }) {
+               let relIdx = updatedQA.firstIndex(where: { $0.path == targetPath }) {
                 let insertIdx = (position == .above) ? relIdx : relIdx + 1
-                let safeIdx = max(0, min(insertIdx, quickAccessItems.count))
-                quickAccessItems.insert(item, at: safeIdx)
+                let safeIdx = max(0, min(insertIdx, updatedQA.count))
+                updatedQA.insert(item, at: safeIdx)
             } else {
-                quickAccessItems.append(item)
+                updatedQA.append(item)
             }
+            quickAccessItems = updatedQA
         }
 
         existingPaths.insert(path)
@@ -515,8 +547,6 @@ class SidebarManager: ObservableObject {
         } else if let v3Data = UserDefaults.standard.data(forKey: groupsV3Key),
                   let decodedV3 = try? JSONDecoder().decode([SidebarGroup].self, from: v3Data),
                   !decodedV3.isEmpty {
-            // Migrate from v3:
-            // "QuickAccess 는 'Add to Sidebar' 전용으로 남겨두고 안에 있는 내용은 전부 '기본그룹' 이라는것으로 아래쪽에 만들어서 옮겨"
             var migratedCustomItems: [QuickAccessItem] = []
             var migratedGroups: [SidebarGroup] = []
 
@@ -557,9 +587,10 @@ class SidebarManager: ObservableObject {
             groups = [defaultGroup]
         }
 
-        // Guarantee that a default group named "기본그룹" always exists
+        // Guarantee that a default group named "기본그룹" always exists and only contains built-in items
         if let defIdx = groups.firstIndex(where: { $0.isDefault }) {
             groups[defIdx].name = "기본그룹"
+            groups[defIdx].items.removeAll { !$0.isBuiltIn && $0.icon != "sdcard.fill" }
         } else {
             let def = SidebarGroup(id: "default", name: "기본그룹", isDefault: true, items: defaultBuiltInItems())
             groups.insert(def, at: 0)
