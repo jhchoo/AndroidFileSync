@@ -365,7 +365,6 @@ struct SidebarView: View {
     var onMoveFiles: (([UnifiedFile], String) -> Void)? = nil
     var onUploadToFolder: (([URL], String) -> Void)? = nil
 
-    @State private var showRestoreAlert = false
     @State private var groupToDelete: SidebarGroup? = nil
     @State private var showDeleteGroupAlert = false
     @State private var isAddGroupHovered = false
@@ -583,7 +582,7 @@ struct SidebarView: View {
                             sidebarManager: sidebarManager,
                             onRenameGroup: { },
                             onDeleteGroup: { },
-                            onRestoreBuiltIns: { showRestoreAlert = true },
+                            onRestoreBuiltIns: { sidebarManager.restoreBuiltIns() },
                             hasHiddenBuiltIns: sidebarManager.hasHiddenBuiltIns
                         )
                     }
@@ -658,12 +657,6 @@ struct SidebarView: View {
             }
         }
         .frame(minWidth: 200)
-        .alert("Restore Default Folders?", isPresented: $showRestoreAlert) {
-            Button("Cancel", role: .cancel) { }
-            Button("Restore") { sidebarManager.restoreBuiltIns() }
-        } message: {
-            Text("All hidden default folders will reappear in 기본그룹.")
-        }
         .alert("Delete Group?", isPresented: $showDeleteGroupAlert) {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) {
