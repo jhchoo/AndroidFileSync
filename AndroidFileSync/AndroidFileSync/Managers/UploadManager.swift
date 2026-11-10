@@ -102,6 +102,27 @@ class UploadManager: ObservableObject {
     
     private let progressLock = NSLock()
     private var backgroundProgress: [String: (bytes: UInt64, speed: Double)] = [:]
+    private var ensuredDirectories = Set<String>()
+    
+    private func ensureDestinationDirectory(_ dir: String) async {
+        let nfcDir = dir.precomposedStringWithCanonicalMapping
+        progressLock.lock()
+        let alreadyEnsured = ensuredDirectories.contains(nfcDir)
+        if !alreadyEnsured {
+            ensuredDirectories.insert(nfcDir)
+        }
+        progressLock.unlock()
+        
+        if !alreadyEnsured {
+            try? await ADBManager.createFolder(at: nfcDir)
+        }
+    }
+    
+    func clearEnsuredDirectories() {
+        progressLock.lock()
+        ensuredDirectories.removeAll()
+        progressLock.unlock()
+    }
     
     private var cancellationFlags: [String: Bool] = [:]
     private let flagLock = NSLock()
@@ -304,6 +325,7 @@ struct UploadQueueItem {
     deinit {
         updateTimer?.invalidate()
         endPreventingSleep()
+        clearEnsuredDirectories()
     }
 
     @MainActor
@@ -418,6 +440,7 @@ struct UploadQueueItem {
     func cancelAllUploads() {
         batchCancelled = true
         isBatchUploading = false
+        clearEnsuredDirectories()
         
         // Drain the pending queue so nothing else starts
         queueLock.lock()
@@ -471,6 +494,7 @@ struct UploadQueueItem {
         if batchCancelled { return }
         
         let normDeviceDir = devicePath.precomposedStringWithCanonicalMapping
+        await ensureDestinationDirectory(normDeviceDir)
         let (safeFileName, _) = FileNameHelper.getSafeFilename(fileName)
         let nfcFileName = safeFileName.precomposedStringWithCanonicalMapping
         
@@ -636,6 +660,7 @@ struct UploadQueueItem {
         
         let uploadTask = Task.detached { [weak self] in
             guard let self = self else { return }
+            await self.ensureDestinationDirectory(normDeviceDir)
             
             let progressStream = ADBManager.pushFileWithProgress(
                 localPath: localPath,

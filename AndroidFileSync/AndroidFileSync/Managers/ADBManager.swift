@@ -2567,48 +2567,48 @@ class ADBManager {
     ) -> AsyncThrowingStream<(UInt64, Double), Error> {
         return AsyncThrowingStream { continuation in
             let adbPath = getADBPath()
+            let nfcLocalPath = localPath.precomposedStringWithCanonicalMapping
+            let nfcDevicePath = devicePath.precomposedStringWithCanonicalMapping
             
-            DispatchQueue.global(qos: .userInitiated).async {
-                let process = Process()
-                let stdout = Pipe()
-                let stderr = Pipe()
-                process.executableURL = URL(fileURLWithPath: adbPath)
-                process.arguments = deviceArgs(["push", localPath, devicePath])
-                process.environment = Shell.activeADBEnvironment
-                process.standardOutput = stdout
-                process.standardError = stderr
+            Task {
+                var exitCode: Int32 = 0
+                var adbError = ""
+                var adbOutput = ""
                 
-                do {
-                    try AppProcessLifecycle.run(process)
-                    defer { AppProcessLifecycle.didExit(process) }
-                    let pid = process.processIdentifier
+                await withTaskGroup(of: Void.self) { group in
+                    // Task 1: Main upload task via Shell.runAsync (uses posix_spawn -> exact UTF-8 byte sequences preserved without macOS Process NFD normalization)
+                    group.addTask {
+                        let (code, out, err) = await Shell.runAsync(
+                            adbPath,
+                            args: deviceArgs(["push", nfcLocalPath, nfcDevicePath])
+                        )
+                        exitCode = code
+                        adbOutput = out
+                        adbError = err
+                    }
                     
-                    // Start cancellation monitor AFTER process is running
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        while process.isRunning {
+                    // Task 2: Cancellation monitor
+                    group.addTask {
+                        while !Task.isCancelled {
                             if cancellationCheck() {
-                                AppLogger.log("🛑 Upload: Cancellation detected! Killing PID \(pid)...", level: .warning)
-                                kill(pid, SIGKILL)
-                                break
+                                return
                             }
-                            Thread.sleep(forTimeInterval: 0.1) // 100ms
+                            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
                         }
                     }
                     
-                    // Start progress polling AFTER process is running — only for files >= 20 MB to avoid ADB stat command contention on small files
+                    // Task 3: Progress polling for files >= 10MB
                     if totalBytes >= 10 * 1024 * 1024 {
-                        DispatchQueue.global(qos: .userInitiated).async {
+                        group.addTask {
+                            // Wait a moment for transfer to start
+                            try? await Task.sleep(nanoseconds: 800_000_000)
+                            
+                            let escapedPath = FileNameHelper.escapeForShell(nfcDevicePath)
                             var lastSize: UInt64 = 0
                             var lastCheck = Date()
                             var consecutiveFailures = 0
                             
-                            // Wait a moment for transfer to start
-                            Thread.sleep(forTimeInterval: 0.8)
-                            
-                            let escapedPath = FileNameHelper.escapeForShell(devicePath)
-                            
-                            while process.isRunning && !cancellationCheck() {
-                                // Get remote file size using stat (synchronous for simplicity)
+                            while !Task.isCancelled && !cancellationCheck() {
                                 let (statCode, statOutput, _) = Shell.run(
                                     adbPath,
                                     args: deviceArgs(["shell", "stat", "-c%s", escapedPath])
@@ -2622,102 +2622,79 @@ class ADBManager {
                                     if currentSize > lastSize && timeDiff >= 0.1 {
                                         let bytesDiff = currentSize - lastSize
                                         let speed = Double(bytesDiff) / timeDiff / (1024 * 1024) // MB/s
-                                        
                                         continuation.yield((currentSize, speed))
-                                        
                                         lastSize = currentSize
                                         lastCheck = now
                                     }
                                 } else {
                                     consecutiveFailures += 1
-                                    if consecutiveFailures >= 15 && !process.isRunning {
+                                    if consecutiveFailures >= 15 {
                                         break
                                     }
                                 }
                                 
-                                // Relaxed polling interval to prevent ADB daemon socket starvation over USB
-                                Thread.sleep(forTimeInterval: 1.5)
+                                try? await Task.sleep(nanoseconds: 1_500_000_000)
                             }
                         }
                     }
                     
-                    // Wait for process to complete
-                    process.waitUntilExit()
-
-                    let outputData = stdout.fileHandleForReading.readDataToEndOfFile()
-                    let errorData = stderr.fileHandleForReading.readDataToEndOfFile()
-                    let output = String(data: outputData, encoding: .utf8) ?? ""
-                    let error = String(data: errorData, encoding: .utf8) ?? ""
-
-                    if process.terminationStatus == 0 {
-                        if !cancellationCheck() {
-                            continuation.yield((totalBytes, 0))
-                        }
-                        continuation.finish()
-                    } else {
-                        let message = (error.isEmpty ? output : error).trimmingCharacters(in: .whitespacesAndNewlines)
-                        
-                        // If compression isn't supported, retry without -z
-                        let lowerMsg = message.lowercased()
-                        let isCompressionError = lowerMsg.contains("unknown option") ||
-                                                 lowerMsg.contains("unrecognized option") ||
-                                                 lowerMsg.contains("unknown flags") ||
-                                                 lowerMsg.contains("compression")
-                        
-                        if isCompressionError, totalBytes > 50 * 1024 * 1024 {
-                            AppLogger.log("⚠️ ADB push compression not supported (error: \(message)), retrying without compression", level: .warning)
-                            let retryProcess = Process()
-                            let retryOut = Pipe()
-                            let retryErr = Pipe()
-                            retryProcess.executableURL = URL(fileURLWithPath: adbPath)
-                            retryProcess.arguments = deviceArgs(["push", localPath, devicePath])
-                            retryProcess.environment = Shell.activeADBEnvironment
-                            retryProcess.standardOutput = retryOut
-                            retryProcess.standardError = retryErr
-                            
-                            do {
-                                try AppProcessLifecycle.run(retryProcess)
-                                defer { AppProcessLifecycle.didExit(retryProcess) }
-                                retryProcess.waitUntilExit()
-                                if retryProcess.terminationStatus == 0 {
-                                    if !cancellationCheck() {
-                                        continuation.yield((totalBytes, 0))
-                                    }
-                                    continuation.finish()
-                                    return
-                                } else {
-                                    let retryOutputData = retryOut.fileHandleForReading.readDataToEndOfFile()
-                                    let retryErrorData = retryErr.fileHandleForReading.readDataToEndOfFile()
-                                    let retryOutMsg = String(data: retryOutputData, encoding: .utf8) ?? ""
-                                    let retryErrMsg = String(data: retryErrorData, encoding: .utf8) ?? ""
-                                    let retryFinalMsg = (retryErrMsg.isEmpty ? retryOutMsg : retryErrMsg).trimmingCharacters(in: .whitespacesAndNewlines)
-                                    
-                                    AppLogger.log("❌ Retry push failed: \(retryFinalMsg)", level: .error)
-                                    continuation.finish(throwing: NSError(
-                                        domain: "ADBPush",
-                                        code: Int(retryProcess.terminationStatus),
-                                        userInfo: [NSLocalizedDescriptionKey: retryFinalMsg.isEmpty ? "Upload failed" : retryFinalMsg]
-                                    ))
-                                    return
-                                }
-                            } catch {
-                                AppLogger.log("❌ Retry push process throw: \(error)", level: .error)
-                                continuation.finish(throwing: error)
-                                return
+                    // Wait for the first task to finish (either push finishes or cancellation detected)
+                    await group.next()
+                    
+                    // Cancel remaining background tasks
+                    group.cancelAll()
+                }
+                
+                if cancellationCheck() {
+                    continuation.finish()
+                    return
+                }
+                
+                if exitCode == 0 {
+                    if !cancellationCheck() {
+                        continuation.yield((totalBytes, 0))
+                    }
+                    continuation.finish()
+                } else {
+                    let message = (adbError.isEmpty ? adbOutput : adbError).trimmingCharacters(in: .whitespacesAndNewlines)
+                    
+                    // If compression isn't supported, retry without compression
+                    let lowerMsg = message.lowercased()
+                    let isCompressionError = lowerMsg.contains("unknown option") ||
+                                             lowerMsg.contains("unrecognized option") ||
+                                             lowerMsg.contains("unknown flags") ||
+                                             lowerMsg.contains("compression")
+                    
+                    if isCompressionError, totalBytes > 50 * 1024 * 1024 {
+                        AppLogger.log("⚠️ ADB push compression not supported (error: \(message)), retrying without compression", level: .warning)
+                        let (retryCode, retryOut, retryErr) = await Shell.runAsync(
+                            adbPath,
+                            args: deviceArgs(["push", nfcLocalPath, nfcDevicePath])
+                        )
+                        if retryCode == 0 {
+                            if !cancellationCheck() {
+                                continuation.yield((totalBytes, 0))
                             }
+                            continuation.finish()
+                            return
+                        } else {
+                            let retryErrMsg = (retryErr.isEmpty ? retryOut : retryErr).trimmingCharacters(in: .whitespacesAndNewlines)
+                            AppLogger.log("❌ Retry push failed: \(retryErrMsg)", level: .error)
+                            continuation.finish(throwing: NSError(
+                                domain: "ADBPush",
+                                code: Int(retryCode),
+                                userInfo: [NSLocalizedDescriptionKey: retryErrMsg.isEmpty ? "Upload failed" : retryErrMsg]
+                            ))
+                            return
                         }
-                        
-                        AppLogger.log("❌ ADB Push exited with code \(process.terminationStatus): \(message)", level: .error)
-                        continuation.finish(throwing: NSError(
-                            domain: "ADBPush",
-                            code: Int(process.terminationStatus),
-                            userInfo: [NSLocalizedDescriptionKey: message.isEmpty ? "Upload failed" : message]
-                        ))
                     }
                     
-                } catch {
-                    AppLogger.log("❌ ADB Push Error: \(error)", level: .error)
-                    continuation.finish(throwing: error)
+                    AppLogger.log("❌ ADB Push exited with code \(exitCode): \(message)", level: .error)
+                    continuation.finish(throwing: NSError(
+                        domain: "ADBPush",
+                        code: Int(exitCode),
+                        userInfo: [NSLocalizedDescriptionKey: message.isEmpty ? "Upload failed" : message]
+                    ))
                 }
             }
         }

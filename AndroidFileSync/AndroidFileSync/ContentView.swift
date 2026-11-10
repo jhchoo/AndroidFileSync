@@ -2526,7 +2526,12 @@ struct ContentView: View {
                     let basePath = url.path
                     let (safeFolderName, _) = FileNameHelper.getSafeFilename(url.lastPathComponent)
                     let nfcFolderName = safeFolderName.precomposedStringWithCanonicalMapping
-                    let remoteFolderBase = (path.hasSuffix("/") ? path : path + "/") + nfcFolderName
+                    let trimmedPath = (path.hasSuffix("/") && path.count > 1) ? String(path.dropLast()) : path
+                    let destFolderName = (trimmedPath as NSString).lastPathComponent.precomposedStringWithCanonicalMapping
+                    let isSameFolder = destFolderName.caseInsensitiveCompare(nfcFolderName) == .orderedSame
+                    let remoteFolderBase = isSameFolder
+                        ? trimmedPath
+                        : (trimmedPath.hasSuffix("/") ? trimmedPath : trimmedPath + "/") + nfcFolderName
                     remoteDirsToCreate.insert(remoteFolderBase)
 
                     guard let enumerator = FileManager.default.enumerator(
@@ -2562,7 +2567,7 @@ struct ContentView: View {
                         let subDirs = relativeComponents.dropLast()
                         let remoteDir = subDirs.isEmpty
                             ? remoteFolderBase
-                            : remoteFolderBase + "/" + subDirs.joined(separator: "/")
+                            : (remoteFolderBase.hasSuffix("/") ? remoteFolderBase : remoteFolderBase + "/") + subDirs.joined(separator: "/")
                         remoteDirsToCreate.insert(remoteDir)
 
                         let size = UInt64(rv.fileSize ?? 0)
