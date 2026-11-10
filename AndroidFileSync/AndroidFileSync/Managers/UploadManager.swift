@@ -499,6 +499,14 @@ struct UploadQueueItem {
         
         setCancelled(localPath: localPath, value: false)
         
+        // Clean up any stale decomposed (NFD) variant on Android to prevent dual NFC/NFD entries
+        let altDecomposedPath = safeDevicePath.decomposedStringWithCanonicalMapping
+        if altDecomposedPath != safeDevicePath {
+            let adbPath = ADBManager.getADBPath()
+            let escAlt = FileNameHelper.escapeForSingleQuotedShell(altDecomposedPath)
+            _ = await Shell.runAsync(adbPath, args: ADBManager.deviceArgs(["shell", "rm -f '\(escAlt)'"]))
+        }
+        
         let progressStream = ADBManager.pushFileWithProgress(
             localPath: localPath,
             devicePath: safeDevicePath,

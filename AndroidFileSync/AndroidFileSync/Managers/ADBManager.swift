@@ -1305,7 +1305,7 @@ class ADBManager {
             AppLogger.log("⚙️ [listFiles] Size stats: total=\(totalBytes) bytes (\(totalBytes / 1_048_576) MB), max=\(maxSize) bytes (\(maxSize / 1_048_576) MB), min=\(minSize) bytes")
             let totalElapsed = Date().timeIntervalSince(totalStart)
             AppLogger.log("⚙️ [listFiles] ✅ COMPLETE for \(path) - \(result.count) files in \(String(format: "%.3fs", totalElapsed)) total")
-            return result
+            return deduplicateCanonicalFiles(result)
         }
         
         AppLogger.log("⚙️ [listFiles] Large directory (>100 files) -> trying fast stat path")
@@ -1345,12 +1345,13 @@ class ADBManager {
                 AppLogger.log("⚙️ [listFiles] stat * returned all \(files.count) files")
                 let totalElapsed = Date().timeIntervalSince(totalStart)
                 AppLogger.log("⚙️ [listFiles] ✅ COMPLETE for \(path) - \(files.count) files in \(String(format: "%.3fs", totalElapsed)) total")
-                return files
+                return deduplicateCanonicalFiles(files)
             }
             // stat * got some — fill missing
             if !files.isEmpty {
                 AppLogger.log("⚙️ [listFiles] stat * returned \(files.count)/\(fileNames.count), filling missing")
-                return await fillMissing(from: fileNames, existing: files, basePath: path, adbPath: adbPath)
+                let filled = await fillMissing(from: fileNames, existing: files, basePath: path, adbPath: adbPath)
+                return deduplicateCanonicalFiles(filled)
             }
         }
         
@@ -1359,7 +1360,8 @@ class ADBManager {
         AppLogger.log("⚙️ [listFiles] stat * unavailable, returning \(fileNames.count) files with names only")
         let totalElapsed = Date().timeIntervalSince(totalStart)
         AppLogger.log("⚙️ [listFiles] ✅ COMPLETE for \(path) - \(fileNames.count) names-only in \(String(format: "%.3fs", totalElapsed)) total")
-        return await fillMissing(from: fileNames, existing: [], basePath: path, adbPath: adbPath)
+        let filled = await fillMissing(from: fileNames, existing: [], basePath: path, adbPath: adbPath)
+        return deduplicateCanonicalFiles(filled)
     }
     
     // MARK: - Device Diagnostics
@@ -2015,6 +2017,62 @@ class ADBManager {
         }
     }
     
+    // MARK: - Canonical Deduplication
+
+    /// Deduplicates files that have canonical equivalent names (e.g. Unicode NFC vs NFD).
+    /// If duplicate entries exist on the device:
+    /// - Drops 0-byte ghost files if a non-empty canonical match exists.
+    /// - If both have content or both are 0-byte, prefers the NFC (precomposed) filename.
+    /// - If both share the same normalization form, prefers the one with the later modification date.
+    static func deduplicateCanonicalFiles(_ files: [ADBFile]) -> [ADBFile] {
+        guard files.count > 1 else { return files }
+        
+        var uniqueMap: [String: ADBFile] = [:]
+        for file in files {
+            let key = file.name // In Swift, String hashing and equality are Unicode canonical equivalent
+            if let existing = uniqueMap[key] {
+                // If existing is 0-byte ghost and current has content, current wins
+                if existing.size == 0 && file.size > 0 {
+                    uniqueMap[key] = file
+                } else if existing.size > 0 && file.size == 0 {
+                    // Keep existing non-empty file
+                    continue
+                } else {
+                    // Both have data or both are 0-byte: prefer NFC
+                    let existingIsNFC = existing.name == existing.name.precomposedStringWithCanonicalMapping
+                    let currentIsNFC = file.name == file.name.precomposedStringWithCanonicalMapping
+                    if currentIsNFC && !existingIsNFC {
+                        uniqueMap[key] = file
+                    } else if !currentIsNFC && existingIsNFC {
+                        continue
+                    } else {
+                        // Prefer newer modification date
+                        let existingDate = existing.modificationDate ?? .distantPast
+                        let currentDate = file.modificationDate ?? .distantPast
+                        if currentDate > existingDate {
+                            uniqueMap[key] = file
+                        }
+                    }
+                }
+            } else {
+                uniqueMap[key] = file
+            }
+        }
+        
+        // Preserve original ordering
+        var seen = Set<String>()
+        var result: [ADBFile] = []
+        for file in files {
+            let key = file.name
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            if let best = uniqueMap[key] {
+                result.append(best)
+            }
+        }
+        return result
+    }
+
     // Helper for small directories — tries stat first (modern), falls back to ls -la (legacy)
     private static func listFilesWithDetails(path: String, adbPath: String, exactNames: [String]) async throws -> [ADBFile] {
         AppLogger.log("⚙️ [listFilesWithDetails] Retrieving details for \(exactNames.count) files in: \(path)")
@@ -2022,7 +2080,7 @@ class ADBManager {
         let statFiles = await listFilesViaStat(path: path, adbPath: adbPath, exactNames: exactNames)
         AppLogger.log("⚙️ [listFilesWithDetails] Strategy 1 (stat) returned \(statFiles.count)/\(exactNames.count) files")
         if statFiles.count == exactNames.count {
-            return statFiles
+            return deduplicateCanonicalFiles(statFiles)
         }
         
         AppLogger.log("⚙️ [listFilesWithDetails] Strategy 1 incomplete, trying Strategy 2 (ls -la)...")
@@ -2036,19 +2094,23 @@ class ADBManager {
                 merged.append(f)
             }
             AppLogger.log("⚙️ [listFilesWithDetails] Merged stat + ls-la returned \(merged.count)/\(exactNames.count) files")
-            if merged.count == exactNames.count { return merged }
-            return await fillMissing(from: exactNames, existing: merged, basePath: path, adbPath: adbPath)
+            if merged.count == exactNames.count { return deduplicateCanonicalFiles(merged) }
+            let filled = await fillMissing(from: exactNames, existing: merged, basePath: path, adbPath: adbPath)
+            return deduplicateCanonicalFiles(filled)
         }
         
         if !statFiles.isEmpty {
-            return await fillMissing(from: exactNames, existing: statFiles, basePath: path, adbPath: adbPath)
+            let filled = await fillMissing(from: exactNames, existing: statFiles, basePath: path, adbPath: adbPath)
+            return deduplicateCanonicalFiles(filled)
         }
         if !lsFiles.isEmpty {
-            return await fillMissing(from: exactNames, existing: lsFiles, basePath: path, adbPath: adbPath)
+            let filled = await fillMissing(from: exactNames, existing: lsFiles, basePath: path, adbPath: adbPath)
+            return deduplicateCanonicalFiles(filled)
         }
         
         AppLogger.log("⚠️ [listFilesWithDetails] Both stat and ls-la failed completely. Falling back to names-only.")
-        return await fillMissing(from: exactNames, existing: [], basePath: path, adbPath: adbPath)
+        let filled = await fillMissing(from: exactNames, existing: [], basePath: path, adbPath: adbPath)
+        return deduplicateCanonicalFiles(filled)
     }
     
     /// Parses a `content query` row to extract the `_display_name` value.
@@ -2309,7 +2371,8 @@ class ADBManager {
             completedFiles += batch.count
             
             if !batchFiles.isEmpty {
-                onBatch(batchFiles)
+                let deduped = deduplicateCanonicalFiles(batchFiles)
+                onBatch(deduped)
                 print("📂 ADB: Metadata batch \(batchIndex + 1)/\(totalBatches) — got \(batchFiles.count) files (\(completedFiles)/\(fileNames.count) total)")
             } else {
                 print("📂 ADB: Metadata batch \(batchIndex + 1)/\(totalBatches) — stat returned nothing for \(batch.count) files")
@@ -2374,7 +2437,8 @@ class ADBManager {
                 }
                 
                 if !recovered.isEmpty {
-                    onBatch(recovered)
+                    let deduped = deduplicateCanonicalFiles(recovered)
+                    onBatch(deduped)
                     print("📂 ADB: ls -ld retry recovered \(recovered.count) files (\(retryStart + retryEnd)/\(missedNames.count) retried)")
                 }
             }
@@ -3735,10 +3799,20 @@ class ADBManager {
         }
 
         for chunk in chunks {
-            let commands = chunk.map { entry -> String in
+            let commands = chunk.flatMap { entry -> [String] in
                 let ts = formatter.string(from: entry.date)
-                let escaped = FileNameHelper.escapeForShell(entry.devicePath)
-                return "touch -t \(ts) \(escaped)"
+                let nfcPath = entry.devicePath.precomposedStringWithCanonicalMapping
+                let nfdPath = entry.devicePath.decomposedStringWithCanonicalMapping
+                let escapedNFC = FileNameHelper.escapeForShell(nfcPath)
+                if nfcPath != nfdPath {
+                    let escapedNFD = FileNameHelper.escapeForShell(nfdPath)
+                    return [
+                        "touch -c -t \(ts) \(escapedNFC)",
+                        "touch -c -t \(ts) \(escapedNFD)"
+                    ]
+                } else {
+                    return ["touch -c -t \(ts) \(escapedNFC)"]
+                }
             }
             let shellCommand = commands.joined(separator: "; ")
             let (code, _, err) = await Shell.runAsync(adbPath, args: deviceArgs(["shell", shellCommand]))

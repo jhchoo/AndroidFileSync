@@ -47,10 +47,11 @@ struct FileNameHelper {
         return sanitized
     }
     
-    // Get safe version with original extension preserved
+    // Get safe version with original extension preserved and normalized to Unicode NFC (Android standard)
     static func getSafeFilename(_ filename: String) -> (safe: String, wasModified: Bool) {
         let sanitized = sanitizeFilename(filename)
-        return (sanitized, sanitized != filename)
+        let nfc = sanitized.precomposedStringWithCanonicalMapping
+        return (nfc, nfc != filename)
     }
 
     // MARK: - ADB Shell Output Sanitization

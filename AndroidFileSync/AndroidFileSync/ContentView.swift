@@ -2546,9 +2546,19 @@ struct ContentView: View {
                 let chunkEnd = min(chunkStart + chunkSize, allDevicePaths.count)
                 let chunk = Array(allDevicePaths[chunkStart..<chunkEnd])
                 
-                let checks = chunk.map { path in
-                    let escaped = path.replacingOccurrences(of: "'", with: "'\\''")
-                    return "[ -e '\(escaped)' ] && echo '\(escaped)'"
+                let checks = chunk.flatMap { path -> [String] in
+                    let nfc = path.precomposedStringWithCanonicalMapping
+                    let nfd = path.decomposedStringWithCanonicalMapping
+                    let escNFC = nfc.replacingOccurrences(of: "'", with: "'\\''")
+                    if nfc != nfd {
+                        let escNFD = nfd.replacingOccurrences(of: "'", with: "'\\''")
+                        return [
+                            "[ -e '\(escNFC)' ] && echo '\(escNFC)'",
+                            "[ -e '\(escNFD)' ] && echo '\(escNFC)'"
+                        ]
+                    } else {
+                        return ["[ -e '\(escNFC)' ] && echo '\(escNFC)'"]
+                    }
                 }.joined(separator: "; ")
                 
                 let (code, out, _) = await Shell.runAsync(
@@ -2567,7 +2577,7 @@ struct ContentView: View {
 
             if !conflictingPaths.isEmpty {
                 let conflictNames = allItems
-                    .filter { conflictingPaths.contains(fullDevicePath($0)) }
+                    .filter { conflictingPaths.contains(fullDevicePath($0).precomposedStringWithCanonicalMapping) }
                     .map { $0.fileName }
 
                 try? await Task.sleep(nanoseconds: 350_000_000)
