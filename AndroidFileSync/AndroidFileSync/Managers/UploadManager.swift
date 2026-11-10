@@ -470,17 +470,19 @@ struct UploadQueueItem {
     ) async throws {
         if batchCancelled { return }
         
+        let normDeviceDir = devicePath.precomposedStringWithCanonicalMapping
         let (safeFileName, _) = FileNameHelper.getSafeFilename(fileName)
+        let nfcFileName = safeFileName.precomposedStringWithCanonicalMapping
         
         let safeDevicePath: String
-        if devicePath.hasSuffix("/") {
-            safeDevicePath = devicePath + safeFileName
+        if normDeviceDir.hasSuffix("/") {
+            safeDevicePath = normDeviceDir + nfcFileName
         } else {
-            safeDevicePath = devicePath + "/" + safeFileName
+            safeDevicePath = normDeviceDir + "/" + nfcFileName
         }
         
         let progress = UploadProgress(
-            fileName: safeFileName,
+            fileName: nfcFileName,
             localPath: localPath,
             devicePath: safeDevicePath,
             totalBytes: fileSize,
@@ -504,7 +506,7 @@ struct UploadQueueItem {
         if altDecomposedPath != safeDevicePath {
             let adbPath = ADBManager.getADBPath()
             let escAlt = FileNameHelper.escapeForSingleQuotedShell(altDecomposedPath)
-            _ = await Shell.runAsync(adbPath, args: ADBManager.deviceArgs(["shell", "rm -f '\(escAlt)'"]))
+            _ = await Shell.runAsync(adbPath, args: ADBManager.deviceArgs(["shell", "rm -f '\(escAlt)' 2>/dev/null || true"]))
         }
         
         let progressStream = ADBManager.pushFileWithProgress(
@@ -604,17 +606,19 @@ struct UploadQueueItem {
         fileSize: UInt64,
         to devicePath: String
     ) -> Task<Void, Never> {
+        let normDeviceDir = devicePath.precomposedStringWithCanonicalMapping
         let (safeFileName, _) = FileNameHelper.getSafeFilename(fileName)
+        let nfcFileName = safeFileName.precomposedStringWithCanonicalMapping
         
         let safeDevicePath: String
-        if devicePath.hasSuffix("/") {
-            safeDevicePath = devicePath + safeFileName
+        if normDeviceDir.hasSuffix("/") {
+            safeDevicePath = normDeviceDir + nfcFileName
         } else {
-            safeDevicePath = devicePath + "/" + safeFileName
+            safeDevicePath = normDeviceDir + "/" + nfcFileName
         }
         
         let progress = UploadProgress(
-            fileName: safeFileName,
+            fileName: nfcFileName,
             localPath: localPath,
             devicePath: safeDevicePath,
             totalBytes: fileSize

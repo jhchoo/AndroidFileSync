@@ -33,6 +33,10 @@ struct UnifiedFile: Identifiable, Hashable {
     let isDirectory: Bool
     let size: UInt64
     let modificationDate: Date?
+    /// Precomputed lowercase file extension derived from the file name (avoids O(N log N) allocations during sort & cell rendering)
+    let pathExtension: String
+    /// Precomputed media category key for Type sort: Folders → Images → Videos → Audio → Docs → Other
+    let sortableType: String
     
     // Direct initializer
     init(name: String, path: String, isDirectory: Bool, size: UInt64, modificationDate: Date? = nil) {
@@ -42,47 +46,23 @@ struct UnifiedFile: Identifiable, Hashable {
         self.isDirectory = isDirectory
         self.size = size
         self.modificationDate = modificationDate
+        let ext = isDirectory ? "" : (name as NSString).pathExtension.lowercased()
+        self.pathExtension = ext
+        self.sortableType = Self.computeSortableType(isDirectory: isDirectory, ext: ext)
     }
     
     init(from adbFile: ADBFile) {
-        self.id = adbFile.path
-        self.name = adbFile.name
-        self.path = adbFile.path
-        self.isDirectory = adbFile.isDirectory
-        self.size = adbFile.size
-        self.modificationDate = adbFile.modificationDate
+        self.init(
+            name: adbFile.name,
+            path: adbFile.path,
+            isDirectory: adbFile.isDirectory,
+            size: adbFile.size,
+            modificationDate: adbFile.modificationDate
+        )
     }
     
-    // Hashable — use path for identity (consistent with id)
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-    }
-    
-    static func == (lhs: UnifiedFile, rhs: UnifiedFile) -> Bool {
-        lhs.id == rhs.id &&
-        lhs.name == rhs.name &&
-        lhs.path == rhs.path &&
-        lhs.isDirectory == rhs.isDirectory &&
-        lhs.size == rhs.size &&
-        lhs.modificationDate == rhs.modificationDate
-    }
-    
-    // MARK: - Computed Properties
-    
-    /// Lowercase file extension derived from the file name
-    var pathExtension: String {
-        (name as NSString).pathExtension.lowercased()
-    }
-    
-    // MARK: - Sortable Properties for Table
-    var sortableDate: Date {
-        modificationDate ?? Date.distantPast
-    }
-    
-    // Groups files by media category for Type sort: Folders → Images → Videos → Audio → Docs → Other
-    var sortableType: String {
+    private static func computeSortableType(isDirectory: Bool, ext: String) -> String {
         if isDirectory { return "0_Folder" }
-        let ext = (name as NSString).pathExtension.lowercased()
         switch ext {
         case "jpg", "jpeg", "png", "gif", "heic", "webp", "bmp", "tiff":
             return "1_Image_" + ext
@@ -100,15 +80,31 @@ struct UnifiedFile: Identifiable, Hashable {
             return "7_Other_" + ext
         }
     }
+    
+    // Hashable — use path for identity (consistent with id)
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+    
+    static func == (lhs: UnifiedFile, rhs: UnifiedFile) -> Bool {
+        lhs.id == rhs.id &&
+        lhs.name == rhs.name &&
+        lhs.path == rhs.path &&
+        lhs.isDirectory == rhs.isDirectory &&
+        lhs.size == rhs.size &&
+        lhs.modificationDate == rhs.modificationDate
+    }
+    
+    // MARK: - Sortable Properties for Table
+    var sortableDate: Date {
+        modificationDate ?? Date.distantPast
+    }
 }
 
 
 // MARK: - Helper Functions
 func formatBytes(_ bytes: UInt64) -> String {
-    let formatter = ByteCountFormatter()
-    formatter.allowedUnits = [.useAll]
-    formatter.countStyle = .file
-    return formatter.string(fromByteCount: Int64(bytes))
+    ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file)
 }
 extension NSSavePanel {
     // This single extension will work for both NSSavePanel and its subclass NSOpenPanel

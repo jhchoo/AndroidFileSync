@@ -139,6 +139,7 @@ class FileActionManager: ObservableObject {
     private var pendingPasteItems: [(file: UnifiedFile, dest: String)] = []
     private var pendingDestinationPath: String = ""
     private var pendingOperation: ClipboardOperation = .none
+    private var pendingIsMoveOperation: Bool = false
     
     // Trash functionality
     @Published var trashedItems: [TrashedItem] = []
@@ -761,6 +762,61 @@ class FileActionManager: ObservableObject {
         clipboardOperation = .cut
     }
     
+    /// Normalizes a destination directory path to the active accessible storage mount and NFC Unicode form.
+    private func resolveDestinationPath(_ path: String) -> String {
+        let trimmed = (path.hasSuffix("/") && path.count > 1) ? String(path.dropLast()) : path
+        let canonical = AndroidStorageAccess.canonicalPath(trimmed).precomposedStringWithCanonicalMapping
+        if AndroidStorageAccess.storageRoot(for: trimmed) != nil {
+            return AndroidStorageAccess.path(canonical, through: internalStoragePath).precomposedStringWithCanonicalMapping
+        }
+        return trimmed.precomposedStringWithCanonicalMapping
+    }
+
+    /// Checks which candidate paths already exist on the Android device in batched ADB shell calls (up to 50 paths per call).
+    /// Checks both NFC and NFD Unicode normalization forms so Korean/non-ASCII filenames are accurately detected.
+    private func batchCheckExistingPaths(_ paths: [String]) async -> Set<String> {
+        guard !paths.isEmpty else { return [] }
+        let adbPath = ADBManager.getADBPath()
+        guard !adbPath.isEmpty else { return [] }
+
+        var existing = Set<String>()
+        let chunkSize = 50
+
+        for start in stride(from: 0, to: paths.count, by: chunkSize) {
+            let end = min(start + chunkSize, paths.count)
+            let chunk = Array(paths[start..<end])
+
+            var checks: [String] = []
+            checks.reserveCapacity(chunk.count)
+            for (idx, path) in chunk.enumerated() {
+                let nfc = path.precomposedStringWithCanonicalMapping
+                let nfd = path.decomposedStringWithCanonicalMapping
+                let escNFC = nfc.replacingOccurrences(of: "'", with: "'\\''")
+                if nfc == nfd {
+                    checks.append("([ -e '\(escNFC)' ] && echo \(idx))")
+                } else {
+                    let escNFD = nfd.replacingOccurrences(of: "'", with: "'\\''")
+                    checks.append("(([ -e '\(escNFC)' ] || [ -e '\(escNFD)' ]) && echo \(idx))")
+                }
+            }
+
+            let command = checks.joined(separator: "; ") + "; true"
+            let (_, output, _) = await Shell.runAsync(
+                adbPath,
+                args: ADBManager.deviceArgs(["shell", command])
+            )
+
+            for line in output.split(whereSeparator: \.isNewline) {
+                if let idx = Int(line.trimmingCharacters(in: .whitespacesAndNewlines)),
+                   idx >= 0 && idx < chunk.count {
+                    existing.insert(chunk[idx])
+                }
+            }
+        }
+
+        return existing
+    }
+
     /// Phase 1: ensure destination exists, build candidate paths, check for conflicts.
     /// If conflicts are found they are published to `pasteConflicts` and this method returns
     /// without copying anything. The UI should then call `resumePaste(resolution:)`.
@@ -769,6 +825,7 @@ class FileActionManager: ObservableObject {
 
         let operation    = clipboardOperation
         let itemsToPaste = clipboard
+        let resolvedDestDir = resolveDestinationPath(destinationPath)
 
         await MainActor.run {
             resetCancellation()
@@ -779,7 +836,7 @@ class FileActionManager: ObservableObject {
         }
 
         // Auto-create destination (handles Quick Access folders that don't exist yet)
-        let escapedDest = destinationPath.replacingOccurrences(of: "'", with: "'\\''")
+        let escapedDest = resolvedDestDir.replacingOccurrences(of: "'", with: "'\\''")
         let mkdirResult = await Shell.runAsync(
             ADBManager.getADBPath(),
             args: ADBManager.deviceArgs(["shell", "mkdir -p '\(escapedDest)'"])
@@ -788,51 +845,89 @@ class FileActionManager: ObservableObject {
             await MainActor.run {
                 isPerformingAction = false
                 currentAction      = ""
-                lastError          = "Cannot create destination: \(destinationPath)\n\(mkdirResult.2)"
+                lastError          = "Cannot create destination: \(resolvedDestDir)\n\(mkdirResult.2)"
             }
             return
         }
 
-        var readyItems:    [(file: UnifiedFile, dest: String)] = []
-        var conflictItems: [(file: UnifiedFile, dest: String)] = []
+        let canonDestDir = AndroidStorageAccess.canonicalPath(resolvedDestDir).precomposedStringWithCanonicalMapping
+        var readyItems:      [(file: UnifiedFile, dest: String)] = []
+        var candidateItems:  [(file: UnifiedFile, dest: String)] = []
+        var conflictItems:   [(file: UnifiedFile, dest: String)] = []
+        var skippedSelfDirs: [String] = []
+        var reservedCanonicalPaths = Set<String>()
 
         for file in itemsToPaste {
-            let baseDest = destinationPath.hasSuffix("/")
-                ? "\(destinationPath)\(file.name)"
-                : "\(destinationPath)/\(file.name)"
+            let cleanName = file.name.precomposedStringWithCanonicalMapping
+            let baseDest = resolvedDestDir.hasSuffix("/")
+                ? "\(resolvedDestDir)\(cleanName)"
+                : "\(resolvedDestDir)/\(cleanName)"
 
-            // Prevent copying folder into itself
-            if file.isDirectory && baseDest.hasPrefix(file.path) { continue }
+            let canonSrc  = AndroidStorageAccess.canonicalPath(file.path).precomposedStringWithCanonicalMapping
+            let canonBase = AndroidStorageAccess.canonicalPath(baseDest).precomposedStringWithCanonicalMapping
 
-            // Same folder: always rename to _copy (no confirm needed)
-            if file.path == baseDest {
-                let copyPath = await uniqueCopyPath(original: file.path, inDirectory: destinationPath, isDirectory: file.isDirectory)
+            // 1. Same path (pasting into the exact same folder where the item already lives):
+            //    Must be checked BEFORE the self-subdirectory check so copying a folder in the
+            //    same directory creates "Folder_copy" instead of being skipped!
+            if canonSrc == canonBase {
+                if operation == .cut {
+                    // Cutting and pasting into the same folder is a no-op
+                    continue
+                }
+                let copyPath = await uniqueCopyPath(
+                    original: baseDest,
+                    inDirectory: resolvedDestDir,
+                    isDirectory: file.isDirectory,
+                    reservedCanonicalPaths: &reservedCanonicalPaths
+                )
                 readyItems.append((file, copyPath))
                 continue
             }
 
-            // Check if destination already exists on device
-            let escBase = baseDest.replacingOccurrences(of: "'", with: "'\\''")
-            let (_, testOut, _) = await Shell.runAsync(
-                ADBManager.getADBPath(),
-                args: ADBManager.deviceArgs(["shell", "[ -e '\(escBase)' ] && echo 1 || echo 0"])
-            )
-            if testOut.trimmingCharacters(in: .whitespacesAndNewlines) == "1" {
-                conflictItems.append((file, baseDest))
-            } else {
-                readyItems.append((file, baseDest))
+            // 2. Prevent copying/moving a folder into itself or a subdirectory of itself
+            if file.isDirectory && (canonDestDir == canonSrc || canonDestDir.hasPrefix(canonSrc + "/")) {
+                skippedSelfDirs.append(file.name)
+                continue
+            }
+
+            candidateItems.append((file, baseDest))
+        }
+
+        // 3. Batch-check which candidate destinations already exist on the device
+        if !candidateItems.isEmpty {
+            let existingPaths = await batchCheckExistingPaths(candidateItems.map { $0.dest })
+            for item in candidateItems {
+                if existingPaths.contains(item.dest) {
+                    conflictItems.append(item)
+                } else {
+                    readyItems.append(item)
+                    reservedCanonicalPaths.insert(
+                        AndroidStorageAccess.canonicalPath(item.dest).precomposedStringWithCanonicalMapping
+                    )
+                }
             }
         }
 
         await MainActor.run { isPerformingAction = false }
+
+        if readyItems.isEmpty && conflictItems.isEmpty {
+            if !skippedSelfDirs.isEmpty {
+                let verb = (operation == .cut) ? "move" : "copy"
+                await MainActor.run {
+                    lastError = "Cannot \(verb) folder \"\(skippedSelfDirs.joined(separator: ", "))\" into itself."
+                }
+            }
+            return
+        }
 
         if conflictItems.isEmpty {
             try await executePaste(items: readyItems, operation: operation)
         } else {
             // Surface conflicts to UI
             pendingPasteItems      = readyItems
-            pendingDestinationPath = destinationPath
+            pendingDestinationPath = resolvedDestDir
             pendingOperation       = operation
+            pendingIsMoveOperation = false
             await MainActor.run {
                 pasteConflicts = conflictItems.map { PasteConflict(file: $0.file, destinationPath: $0.dest) }
             }
@@ -845,20 +940,33 @@ class FileActionManager: ObservableObject {
         let ready     = pendingPasteItems
         let dest      = pendingDestinationPath
         let operation = pendingOperation
+        let isMoveOp  = pendingIsMoveOperation
 
         await MainActor.run { pasteConflicts = [] }
 
+        var reservedCanonicalPaths = Set(
+            ready.map { AndroidStorageAccess.canonicalPath($0.dest).precomposedStringWithCanonicalMapping }
+        )
+
         var allItems = ready
+        var pathsToRemoveBeforeReplace: [String] = []
+
         for conflict in conflicts {
             switch resolution {
             case .replace:
+                let canonSrc = AndroidStorageAccess.canonicalPath(conflict.file.path).precomposedStringWithCanonicalMapping
+                let canonDst = AndroidStorageAccess.canonicalPath(conflict.destinationPath).precomposedStringWithCanonicalMapping
+                if canonSrc != canonDst {
+                    pathsToRemoveBeforeReplace.append(conflict.destinationPath)
+                }
                 allItems.append((conflict.file, conflict.destinationPath))
             case .keepBoth:
-                // Probe the device to find a truly free name (async, loop)
+                // Probe the device in a single shell call to find a free name
                 let safePath = await uniqueCopyPath(
                     original: conflict.destinationPath,
                     inDirectory: dest,
-                    isDirectory: conflict.file.isDirectory
+                    isDirectory: conflict.file.isDirectory,
+                    reservedCanonicalPaths: &reservedCanonicalPaths
                 )
                 allItems.append((conflict.file, safePath))
             case .skip:
@@ -866,7 +974,25 @@ class FileActionManager: ObservableObject {
             }
         }
 
-        try await executePaste(items: allItems, operation: operation)
+        // Pre-remove conflicting targets when replacing so folders aren't nested inside existing folders
+        // and Android FUSE files don't fail on overwrite.
+        if !pathsToRemoveBeforeReplace.isEmpty {
+            let escapedList = pathsToRemoveBeforeReplace.map { path -> String in
+                let nfc = path.precomposedStringWithCanonicalMapping.replacingOccurrences(of: "'", with: "'\\''")
+                let nfd = path.decomposedStringWithCanonicalMapping.replacingOccurrences(of: "'", with: "'\\''")
+                return nfc == nfd ? "'\(nfc)'" : "'\(nfc)' '\(nfd)'"
+            }.joined(separator: " ")
+            _ = await Shell.runAsync(
+                ADBManager.getADBPath(),
+                args: ADBManager.deviceArgs(["shell", "rm -rf \(escapedList) 2>/dev/null || true"])
+            )
+        }
+
+        if isMoveOp {
+            try await executeMove(items: allItems)
+        } else {
+            try await executePaste(items: allItems, operation: operation)
+        }
     }
 
     /// Execute a resolved list of paste items.
@@ -888,13 +1014,20 @@ class FileActionManager: ObservableObject {
         var successPaths: [String] = []
 
         if operation == .cut {
-            // ── BATCH MOVE: combine all mv commands into a single ADB shell call ──
-            // This avoids N separate ADB round trips over WiFi.
+            // ── BATCH MOVE: combine all mv commands into a single ADB shell call with NFC/NFD fallback ──
             var moveCommands: [String] = []
             for (file, destFile) in items {
+                let normDest = destFile.precomposedStringWithCanonicalMapping
+                let nfcSrc = file.path.precomposedStringWithCanonicalMapping
+                let nfdSrc = file.path.decomposedStringWithCanonicalMapping
+                let altSrc = (file.path == nfcSrc) ? nfdSrc : nfcSrc
+
                 let escapedSrc = file.path.replacingOccurrences(of: "'", with: "'\\''")
-                let escapedDst = destFile.replacingOccurrences(of: "'", with: "'\\''")
-                moveCommands.append("mv '\(escapedSrc)' '\(escapedDst)'")
+                let escapedAlt = altSrc.replacingOccurrences(of: "'", with: "'\\''")
+                let escapedDst = normDest.replacingOccurrences(of: "'", with: "'\\''")
+                moveCommands.append(
+                    "(src='\(escapedSrc)'; if [ ! -e \"$src\" ] && [ -e '\(escapedAlt)' ]; then src='\(escapedAlt)'; fi; mv -f \"$src\" '\(escapedDst)')"
+                )
                 print("\u{1F4CB} Paste: move '\(file.path)' \u{2192} '\(destFile)'")
             }
             
@@ -923,8 +1056,40 @@ class FileActionManager: ObservableObject {
                 }
             }
         } else {
-            // ── COPY: run individually (cp -r needs per-item error handling) ──
-            for (file, destFile) in items {
+            // ── COPY: batch small regular files for speed, and copy directories/large files individually ──
+            var remainingItems: [(file: UnifiedFile, dest: String)] = []
+            let smallFileBatchLimit = 15
+            let maxBatchFileSize: UInt64 = 25 * 1024 * 1024 // 25 MB
+            var idx = 0
+            while idx < items.count {
+                if await MainActor.run(body: { cancellationRequested }) { break }
+                let current = items[idx]
+                if !current.file.isDirectory && current.file.size < maxBatchFileSize {
+                    var batchEnd = idx
+                    while batchEnd < items.count,
+                          (batchEnd - idx) < smallFileBatchLimit,
+                          !items[batchEnd].file.isDirectory,
+                          items[batchEnd].file.size < maxBatchFileSize {
+                        batchEnd += 1
+                    }
+                    if batchEnd - idx > 1 {
+                        let slice = Array(items[idx..<batchEnd])
+                        let pairs = slice.map { (source: $0.file.path, dest: $0.dest) }
+                        if await ADBManager.batchCopyRegularFiles(pairs) {
+                            for entry in slice {
+                                successPaths.append(entry.dest.precomposedStringWithCanonicalMapping)
+                                successCount += 1
+                            }
+                            idx = batchEnd
+                            continue
+                        }
+                    }
+                }
+                remainingItems.append(current)
+                idx += 1
+            }
+
+            for (file, destFile) in remainingItems {
                 // Check for cancellation
                 if await MainActor.run(body: { cancellationRequested }) {
                     await MainActor.run {
@@ -962,12 +1127,11 @@ class FileActionManager: ObservableObject {
             }
         }
 
-        // Trigger media scan for all pasted files (batch, non-blocking)
+        // Trigger batched media scan for all pasted files (non-blocking)
         if !successPaths.isEmpty {
+            let pathsToScan = successPaths
             Task.detached(priority: .background) {
-                for path in successPaths {
-                    await ADBManager.triggerMediaScan(path: path)
-                }
+                await ADBManager.triggerMediaScanForFiles(pathsToScan)
             }
         }
 
@@ -988,14 +1152,15 @@ class FileActionManager: ObservableObject {
     func moveFiles(_ files: [UnifiedFile], to destinationPath: String) async throws {
         guard !files.isEmpty else { return }
 
-        let normalizedDest = destinationPath.hasSuffix("/") && destinationPath.count > 1
-            ? String(destinationPath.dropLast())
-            : destinationPath
+        let normalizedDest = resolveDestinationPath(destinationPath)
+        let canonDestDir = AndroidStorageAccess.canonicalPath(normalizedDest).precomposedStringWithCanonicalMapping
 
         let validFiles = files.filter { file in
             let currentParent = (file.path as NSString).deletingLastPathComponent
-            if currentParent == normalizedDest { return false }
-            if file.isDirectory && (normalizedDest == file.path || normalizedDest.hasPrefix(file.path + "/")) {
+            let canonParent = AndroidStorageAccess.canonicalPath(currentParent).precomposedStringWithCanonicalMapping
+            let canonSrc = AndroidStorageAccess.canonicalPath(file.path).precomposedStringWithCanonicalMapping
+            if canonParent == canonDestDir { return false }
+            if file.isDirectory && (canonDestDir == canonSrc || canonDestDir.hasPrefix(canonSrc + "/")) {
                 return false
             }
             return true
@@ -1009,37 +1174,35 @@ class FileActionManager: ObservableObject {
             lastError          = nil
         }
 
-        // Ensure destination folder exists
-        let mkdirResult = await Shell.runAsync(
-            ADBManager.getADBPath(),
-            args: ADBManager.deviceArgs(["shell", "mkdir -p '\(normalizedDest.replacingOccurrences(of: "'", with: "'\\''"))'"])
-        )
-        if mkdirResult.0 != 0 {
+        // Ensure destination folder exists (auto-merges any NFD variant to prevent duplicates)
+        do {
+            try await ADBManager.createFolder(at: normalizedDest)
+        } catch {
             await MainActor.run {
                 isPerformingAction = false
                 currentAction      = ""
-                lastError          = "Cannot access destination: \(normalizedDest)\n\(mkdirResult.2)"
+                lastError          = "Cannot access destination: \(normalizedDest)\n\(error.localizedDescription)"
             }
             return
         }
 
+        let candidateItems: [(file: UnifiedFile, dest: String)] = validFiles.map { file in
+            let cleanName = file.name.precomposedStringWithCanonicalMapping
+            let baseDest = normalizedDest.hasSuffix("/")
+                ? "\(normalizedDest)\(cleanName)"
+                : "\(normalizedDest)/\(cleanName)"
+            return (file, baseDest)
+        }
+
+        let existingPaths = await batchCheckExistingPaths(candidateItems.map { $0.dest })
         var readyItems:    [(file: UnifiedFile, dest: String)] = []
         var conflictItems: [(file: UnifiedFile, dest: String)] = []
 
-        for file in validFiles {
-            let baseDest = normalizedDest.hasSuffix("/")
-                ? "\(normalizedDest)\(file.name)"
-                : "\(normalizedDest)/\(file.name)"
-
-            let escBase = baseDest.replacingOccurrences(of: "'", with: "'\\''")
-            let (_, testOut, _) = await Shell.runAsync(
-                ADBManager.getADBPath(),
-                args: ADBManager.deviceArgs(["shell", "[ -e '\(escBase)' ] && echo 1 || echo 0"])
-            )
-            if testOut.trimmingCharacters(in: .whitespacesAndNewlines) == "1" {
-                conflictItems.append((file, baseDest))
+        for item in candidateItems {
+            if existingPaths.contains(item.dest) {
+                conflictItems.append(item)
             } else {
-                readyItems.append((file, baseDest))
+                readyItems.append(item)
             }
         }
 
@@ -1051,6 +1214,7 @@ class FileActionManager: ObservableObject {
             pendingPasteItems      = readyItems
             pendingDestinationPath = normalizedDest
             pendingOperation       = .cut
+            pendingIsMoveOperation = true
             await MainActor.run {
                 pasteConflicts = conflictItems.map { PasteConflict(file: $0.file, destinationPath: $0.dest) }
             }
@@ -1073,13 +1237,21 @@ class FileActionManager: ObservableObject {
 
         var moveCommands: [String] = []
         for (file, destFile) in items {
+            let normDest = destFile.precomposedStringWithCanonicalMapping
+            let nfcSrc = file.path.precomposedStringWithCanonicalMapping
+            let nfdSrc = file.path.decomposedStringWithCanonicalMapping
+            let altSrc = (file.path == nfcSrc) ? nfdSrc : nfcSrc
+
             let escapedSrc = file.path.replacingOccurrences(of: "'", with: "'\\''")
-            let escapedDst = destFile.replacingOccurrences(of: "'", with: "'\\''")
-            moveCommands.append("mv '\(escapedSrc)' '\(escapedDst)'")
+            let escapedAlt = altSrc.replacingOccurrences(of: "'", with: "'\\''")
+            let escapedDst = normDest.replacingOccurrences(of: "'", with: "'\\''")
+            moveCommands.append(
+                "(src='\(escapedSrc)'; if [ ! -e \"$src\" ] && [ -e '\(escapedAlt)' ]; then src='\(escapedAlt)'; fi; mv -f \"$src\" '\(escapedDst)')"
+            )
         }
 
         let batchCommand = moveCommands.joined(separator: " && ")
-        let (code, _, error) = await Shell.runAsyncWithTimeout(
+        let (code, _, _) = await Shell.runAsyncWithTimeout(
             ADBManager.getADBPath(),
             args: ADBManager.deviceArgs(["shell", batchCommand]),
             timeoutSeconds: 30.0
@@ -1087,13 +1259,13 @@ class FileActionManager: ObservableObject {
 
         if code == 0 {
             successCount = items.count
-            successPaths = items.map { $0.dest }
+            successPaths = items.map { $0.dest.precomposedStringWithCanonicalMapping }
         } else {
             // Batch failed — fall back to individual moves
             for (file, destFile) in items {
                 do {
                     try await ADBManager.renameFile(oldPath: file.path, newPath: destFile)
-                    successPaths.append(destFile)
+                    successPaths.append(destFile.precomposedStringWithCanonicalMapping)
                     successCount += 1
                 } catch {
                     failedItems.append((file.name, error.localizedDescription))
@@ -1101,12 +1273,11 @@ class FileActionManager: ObservableObject {
             }
         }
 
-        // Trigger media scan for all moved files
+        // Trigger batched media scan for all moved files
         if !successPaths.isEmpty {
+            let pathsToScan = successPaths
             Task.detached(priority: .background) {
-                for path in successPaths {
-                    await ADBManager.triggerMediaScan(path: path)
-                }
+                await ADBManager.triggerMediaScanForFiles(pathsToScan)
             }
         }
 
@@ -1120,39 +1291,67 @@ class FileActionManager: ObservableObject {
         }
     }
     
-    /// Generates a guaranteed-unique destination path for "Keep Both".
+    /// Generates a guaranteed-unique destination path for same-folder copy or "Keep Both" in a single ADB call.
     /// Probes the device via ADB: photo.jpg → photo_copy.jpg → photo_copy_2.jpg → …
-    /// Caps at 99 iterations as a safety net.
-    private func uniqueCopyPath(original: String, inDirectory dir: String, isDirectory: Bool) async -> String {
-        let nsPath    = original as NSString
+    private func uniqueCopyPath(
+        original: String,
+        inDirectory dir: String,
+        isDirectory: Bool,
+        reservedCanonicalPaths: inout Set<String>
+    ) async -> String {
+        let cleanOriginal = original.precomposedStringWithCanonicalMapping
+        let nsPath    = cleanOriginal as NSString
         let ext       = isDirectory ? "" : nsPath.pathExtension
         let nameNoExt = isDirectory
             ? nsPath.lastPathComponent
             : (nsPath.lastPathComponent as NSString).deletingPathExtension
 
-        let base   = dir.hasSuffix("/") ? dir : dir + "/"
-        let adb    = ADBManager.getADBPath()
+        let cleanDir = dir.precomposedStringWithCanonicalMapping
+        let base     = cleanDir.hasSuffix("/") ? cleanDir : cleanDir + "/"
+        let adb      = ADBManager.getADBPath()
 
         func candidate(_ suffix: String) -> String {
             ext.isEmpty ? base + nameNoExt + suffix : base + nameNoExt + suffix + "." + ext
         }
 
-        // First try: name_copy[.ext]
-        let first = candidate("_copy")
-        let esc1  = first.replacingOccurrences(of: "'", with: "'\''") 
-        let (_, out1, _) = await Shell.runAsync(adb, args: ADBManager.deviceArgs(["shell", "[ -e '\(esc1)' ] && echo 1 || echo 0"]))
-        if out1.trimmingCharacters(in: .whitespacesAndNewlines) != "1" { return first }
+        let allSuffixes = ["_copy"] + (2...99).map { "_copy_\($0)" }
+        let unreservedCandidates = allSuffixes.map { candidate($0) }.filter { path in
+            let canon = AndroidStorageAccess.canonicalPath(path).precomposedStringWithCanonicalMapping
+            return !reservedCanonicalPaths.contains(canon)
+        }
 
-        // Subsequent tries: name_copy_2[.ext], name_copy_3[.ext], …
-        for n in 2...99 {
-            let path = candidate("_copy_\(n)")
-            let esc  = path.replacingOccurrences(of: "'", with: "'\''") 
-            let (_, out, _) = await Shell.runAsync(adb, args: ADBManager.deviceArgs(["shell", "[ -e '\(esc)' ] && echo 1 || echo 0"]))
-            if out.trimmingCharacters(in: .whitespacesAndNewlines) != "1" { return path }
+        if !unreservedCandidates.isEmpty && !adb.isEmpty {
+            // Check all candidates in a single ADB shell loop and return the first non-existent index
+            var shellChecks: [String] = []
+            shellChecks.reserveCapacity(unreservedCandidates.count)
+            for (idx, path) in unreservedCandidates.enumerated() {
+                let nfc = path.precomposedStringWithCanonicalMapping.replacingOccurrences(of: "'", with: "'\\''")
+                let nfd = path.decomposedStringWithCanonicalMapping.replacingOccurrences(of: "'", with: "'\\''")
+                if nfc == nfd {
+                    shellChecks.append("if [ ! -e '\(nfc)' ]; then echo \(idx); exit 0; fi")
+                } else {
+                    shellChecks.append("if [ ! -e '\(nfc)' ] && [ ! -e '\(nfd)' ]; then echo \(idx); exit 0; fi")
+                }
+            }
+            let script = shellChecks.joined(separator: "; ")
+            let (code, out, _) = await Shell.runAsync(adb, args: ADBManager.deviceArgs(["shell", script]))
+            if code == 0,
+               let chosenIdx = Int(out.trimmingCharacters(in: .whitespacesAndNewlines)),
+               chosenIdx >= 0 && chosenIdx < unreservedCandidates.count {
+                let chosen = unreservedCandidates[chosenIdx]
+                reservedCanonicalPaths.insert(
+                    AndroidStorageAccess.canonicalPath(chosen).precomposedStringWithCanonicalMapping
+                )
+                return chosen
+            }
         }
 
         // Fallback: timestamp-based name (practically impossible to collide)
-        return candidate("_copy_\(Int(Date().timeIntervalSince1970))")
+        let fallback = candidate("_copy_\(Int(Date().timeIntervalSince1970))")
+        reservedCanonicalPaths.insert(
+            AndroidStorageAccess.canonicalPath(fallback).precomposedStringWithCanonicalMapping
+        )
+        return fallback
     }
     
     /// Clears the clipboard

@@ -1645,6 +1645,8 @@ class ADBManager {
     private static func listMediaFiles(dcimPath: String, adbPath: String, onPageLoaded: (([ADBFile]) -> Void)? = nil) async -> [ADBFile] {
         let resolvedPath = resolvePhysicalPath(dcimPath)
         let normalizedPath = resolvedPath.hasSuffix("/") ? resolvedPath : resolvedPath + "/"
+        let callerBasePath = (dcimPath.hasSuffix("/") && dcimPath.count > 1) ? String(dcimPath.dropLast()) : dcimPath
+        let callerPrefix = callerBasePath.hasSuffix("/") ? callerBasePath : callerBasePath + "/"
         AppLogger.log("⚙️ [listMediaFiles] Starting scan for: \(dcimPath) (Normalized: \(normalizedPath))", level: .info)
         
         var fileNames: [String] = []
@@ -1762,7 +1764,7 @@ class ADBManager {
                     let pageFiles = pageNames.map { name in
                         ADBFile(
                             name: name,
-                            path: normalizedPath + name,
+                            path: callerPrefix + name,
                             isDirectory: false,
                             size: 0,
                             modificationDate: nil
@@ -1858,7 +1860,7 @@ class ADBManager {
                         let pageFiles = pageNames.map { name in
                             ADBFile(
                                 name: name,
-                                path: normalizedPath + name,
+                                path: callerPrefix + name,
                                 isDirectory: false,
                                 size: 0,
                                 modificationDate: nil
@@ -1953,7 +1955,7 @@ class ADBManager {
                     let pageFiles = pageNames.map { name in
                         ADBFile(
                             name: name,
-                            path: normalizedPath + name,
+                            path: callerPrefix + name,
                             isDirectory: false,
                             size: 0,
                             modificationDate: nil
@@ -1981,7 +1983,7 @@ class ADBManager {
         AppLogger.log("⚙️ [listMediaFiles] Total filenames discovered: \(fileNames.count)", level: .info)
         
         // ── Pass 2: Batch stat for metadata (size, date) ──
-        let basePath = normalizedPath.hasSuffix("/") ? String(normalizedPath.dropLast()) : normalizedPath
+        let basePath = callerBasePath
         let statFiles = await listFilesViaStat(path: basePath, adbPath: adbPath, exactNames: fileNames, timeoutPerBatch: 8.0)
         
         if statFiles.count > 0 {
@@ -1992,7 +1994,7 @@ class ADBManager {
                 for name in fileNames where !statNames.contains(name) {
                     merged.append(ADBFile(
                         name: name,
-                        path: normalizedPath + name,
+                        path: callerPrefix + name,
                         isDirectory: false,
                         size: 0,
                         modificationDate: nil
@@ -2009,7 +2011,7 @@ class ADBManager {
         return fileNames.map { name in
             ADBFile(
                 name: name,
-                path: normalizedPath + name,
+                path: callerPrefix + name,
                 isDirectory: false,
                 size: 0,
                 modificationDate: nil
@@ -2021,16 +2023,26 @@ class ADBManager {
 
     /// Deduplicates files that have canonical equivalent names (e.g. Unicode NFC vs NFD).
     /// If duplicate entries exist on the device:
+    /// - For duplicate directories (e.g. NFC and NFD co-existing on disk), schedules background auto-merge on the Android device so they merge into one standard NFC folder.
     /// - Drops 0-byte ghost files if a non-empty canonical match exists.
     /// - If both have content or both are 0-byte, prefers the NFC (precomposed) filename.
     /// - If both share the same normalization form, prefers the one with the later modification date.
     static func deduplicateCanonicalFiles(_ files: [ADBFile]) -> [ADBFile] {
         guard files.count > 1 else { return files }
         
+        var duplicateDirectoriesToMerge: [(nfc: String, nfd: String)] = []
         var uniqueMap: [String: ADBFile] = [:]
         for file in files {
             let key = file.name // In Swift, String hashing and equality are Unicode canonical equivalent
             if let existing = uniqueMap[key] {
+                // If both are directories with different raw paths (e.g. NFC vs NFD), schedule merge on device
+                if existing.isDirectory && file.isDirectory && existing.path != file.path {
+                    let existingIsNFC = existing.path == existing.path.precomposedStringWithCanonicalMapping
+                    let nfcPath = existingIsNFC ? existing.path : file.path
+                    let nfdPath = existingIsNFC ? file.path : existing.path
+                    duplicateDirectoriesToMerge.append((nfc: nfcPath, nfd: nfdPath))
+                }
+                
                 // If existing is 0-byte ghost and current has content, current wins
                 if existing.size == 0 && file.size > 0 {
                     uniqueMap[key] = file
@@ -2059,6 +2071,12 @@ class ADBManager {
             }
         }
         
+        if !duplicateDirectoriesToMerge.isEmpty {
+            Task.detached(priority: .background) {
+                await mergeDuplicateDirectoriesOnDevice(duplicateDirectoriesToMerge)
+            }
+        }
+        
         // Preserve original ordering
         var seen = Set<String>()
         var result: [ADBFile] = []
@@ -2071,6 +2089,25 @@ class ADBManager {
             }
         }
         return result
+    }
+
+    /// Merges duplicate NFC and NFD directories that exist on the Android filesystem into a single standard NFC directory.
+    static func mergeDuplicateDirectoriesOnDevice(_ pairs: [(nfc: String, nfd: String)]) async {
+        let adbPath = getADBPath()
+        guard !adbPath.isEmpty else { return }
+        for (nfc, nfd) in pairs {
+            let escNFC = nfc.replacingOccurrences(of: "'", with: "'\\''")
+            let escNFD = nfd.replacingOccurrences(of: "'", with: "'\\''")
+            let cmd = """
+            if [ -d '\(escNFD)' ] && [ -d '\(escNFC)' ]; then \
+                cp -rf '\(escNFD)/.' '\(escNFC)/' 2>/dev/null; rm -rf '\(escNFD)' 2>/dev/null || true; \
+            elif [ -d '\(escNFD)' ] && [ ! -d '\(escNFC)' ]; then \
+                mv '\(escNFD)' '\(escNFC)' 2>/dev/null || true; \
+            fi
+            """
+            _ = await Shell.runAsync(adbPath, args: deviceArgs(["shell", cmd]))
+            await triggerMediaScan(path: nfc)
+        }
     }
 
     // Helper for small directories — tries stat first (modern), falls back to ls -la (legacy)
@@ -3042,18 +3079,40 @@ class ADBManager {
     ///   - newPath: New path for the file/folder
     static func renameFile(oldPath: String, newPath: String) async throws {
         let adbPath = getADBPath()
-        
-        // Escape single quotes in both paths
+        let normalizedNewPath = newPath.precomposedStringWithCanonicalMapping
+
+        let canonOld = AndroidStorageAccess.canonicalPath(oldPath).precomposedStringWithCanonicalMapping
+        let canonNew = AndroidStorageAccess.canonicalPath(normalizedNewPath).precomposedStringWithCanonicalMapping
+        if canonOld == canonNew && oldPath == normalizedNewPath {
+            return
+        }
+
+        let nfcOld = oldPath.precomposedStringWithCanonicalMapping
+        let nfdOld = oldPath.decomposedStringWithCanonicalMapping
+        let altOld = (oldPath == nfcOld) ? nfdOld : nfcOld
+
         let escapedOldPath = oldPath.replacingOccurrences(of: "'", with: "'\\''")
-        let escapedNewPath = newPath.replacingOccurrences(of: "'", with: "'\\''")
-        
-        // Use mv command to rename/move
-        let command = "mv '\(escapedOldPath)' '\(escapedNewPath)'"
-        
-        let (code, _, error) = await Shell.runAsync(adbPath, args: deviceArgs(["shell", command]))
-        
+        let escapedAltOldPath = altOld.replacingOccurrences(of: "'", with: "'\\''")
+        let escapedNewPath = normalizedNewPath.replacingOccurrences(of: "'", with: "'\\''")
+        let parentDir = (normalizedNewPath as NSString).deletingLastPathComponent
+        let escapedParent = parentDir.replacingOccurrences(of: "'", with: "'\\''")
+
+        // Resolve NFC/NFD source path on device, remove conflicting target if paths differ canonically,
+        // and fall back to copy+remove if cross-mount mv fails on FUSE.
+        let removeExistingTarget = (canonOld != canonNew)
+            ? "(rm -rf '\(escapedNewPath)' 2>/dev/null || true) && "
+            : ""
+        let command = """
+        src='\(escapedOldPath)'; \
+        if [ ! -e "$src" ] && [ -e '\(escapedAltOldPath)' ]; then src='\(escapedAltOldPath)'; fi; \
+        if [ ! -e "$src" ]; then echo "No such file or directory" >&2; exit 2; fi; \
+        mkdir -p '\(escapedParent)' && \(removeExistingTarget)(mv -f "$src" '\(escapedNewPath)' 2>/dev/null || (cp -rf "$src" '\(escapedNewPath)' && rm -rf "$src"))
+        """
+
+        let (code, output, stderr) = await Shell.runAsync(adbPath, args: deviceArgs(["shell", command]))
+        let error = AndroidStorageAccess.commandError((code, output, stderr), fallback: "Failed to move or rename item")
+
         if code != 0 {
-            // Check for specific error types
             if error.contains("Read-only file system") || error.contains("read-only") {
                 throw NSError(
                     domain: "ADB",
@@ -3086,18 +3145,37 @@ class ADBManager {
                 )
             }
         }
-        
     }
     
     // MARK: - Create Folder
     
-    /// Creates a new folder on the Android device
+    /// Creates a new folder on the Android device, enforcing Unicode NFC normalization
+    /// and auto-merging any existing decomposed (NFD) folder to prevent duplicate folder creation.
     /// - Parameter path: Full path for the new folder
     static func createFolder(at path: String) async throws {
         let adbPath = getADBPath()
-        let escapedPath = path.replacingOccurrences(of: "'", with: "'\\''")
-        AppLogger.log("📁 [createFolder] Request to create folder at: \(path)")
-        let command = "mkdir -p '\(escapedPath)' && (chmod 775 '\(escapedPath)' 2>/dev/null || true)"
+        let nfcPath = path.precomposedStringWithCanonicalMapping
+        let nfdPath = path.decomposedStringWithCanonicalMapping
+        let escapedNFC = nfcPath.replacingOccurrences(of: "'", with: "'\\''")
+        let escapedNFD = nfdPath.replacingOccurrences(of: "'", with: "'\\''")
+        
+        AppLogger.log("📁 [createFolder] Request to create folder at: \(nfcPath)")
+        
+        let command: String
+        if nfcPath != nfdPath {
+            // If an NFD folder already exists on Android, migrate/merge it into NFC
+            command = """
+            nfc='\(escapedNFC)'; nfd='\(escapedNFD)'; \
+            if [ -d "$nfd" ] && [ ! -d "$nfc" ]; then \
+                mv "$nfd" "$nfc" 2>/dev/null || true; \
+            elif [ -d "$nfd" ] && [ -d "$nfc" ]; then \
+                cp -rf "$nfd/." "$nfc/" 2>/dev/null; rm -rf "$nfd" 2>/dev/null || true; \
+            fi; \
+            mkdir -p "$nfc" && (chmod 775 "$nfc" 2>/dev/null || true)
+            """
+        } else {
+            command = "mkdir -p '\(escapedNFC)' && (chmod 775 '\(escapedNFC)' 2>/dev/null || true)"
+        }
         
         let (code, output, stderr) = await Shell.runAsync(adbPath, args: deviceArgs(["shell", command]))
         let error = AndroidStorageAccess.commandError((code, output, stderr), fallback: "Failed to create folder")
@@ -3113,22 +3191,24 @@ class ADBManager {
             }
         }
         
-        AppLogger.log("✅ [createFolder] Successfully created folder: \(path)")
+        AppLogger.log("✅ [createFolder] Successfully created folder: \(nfcPath)")
         // Inform MediaStore about the new directory so subsequent moves/renames succeed
         Task.detached(priority: .background) {
-            await triggerMediaScan(path: path)
+            await triggerMediaScan(path: nfcPath)
         }
     }
     
     /// Creates multiple folders on the Android device in batched ADB calls.
+    /// Enforces Unicode NFC normalization and auto-merges/renames existing NFD variants to prevent duplicate folders.
     /// Batches up to 50 paths per shell call to avoid argument length limits.
     static func batchCreateFolders(paths: [String]) async {
         guard !paths.isEmpty else { return }
         let adbPath = getADBPath()
         guard !adbPath.isEmpty else { return }
         
-        // Deduplicate and sort (shorter paths first so parents are created before children)
-        let uniquePaths = Array(Set(paths)).sorted()
+        // Normalize all paths to NFC, deduplicate, and sort (shorter paths first)
+        let normalizedPaths = paths.map { $0.precomposedStringWithCanonicalMapping }
+        let uniquePaths = Array(Set(normalizedPaths)).sorted()
         
         // Batch into chunks of 50
         let chunkSize = 50
@@ -3136,16 +3216,31 @@ class ADBManager {
             let end = min(start + chunkSize, uniquePaths.count)
             let chunk = uniquePaths[start..<end]
             
-            // Build a single mkdir -p command with all paths
-            let escapedPaths = chunk.map { path in
-                let escaped = path.replacingOccurrences(of: "'", with: "'\\''")
-                return "'\(escaped)'"
+            var statements: [String] = []
+            for path in chunk {
+                let nfc = path.precomposedStringWithCanonicalMapping
+                let nfd = path.decomposedStringWithCanonicalMapping
+                let escNFC = nfc.replacingOccurrences(of: "'", with: "'\\''")
+                if nfc != nfd {
+                    let escNFD = nfd.replacingOccurrences(of: "'", with: "'\\''")
+                    statements.append("""
+                    (nfc='\(escNFC)'; nfd='\(escNFD)'; \
+                    if [ -d "$nfd" ] && [ ! -d "$nfc" ]; then \
+                        mv "$nfd" "$nfc" 2>/dev/null || true; \
+                    elif [ -d "$nfd" ] && [ -d "$nfc" ]; then \
+                        cp -rf "$nfd/." "$nfc/" 2>/dev/null; rm -rf "$nfd" 2>/dev/null || true; \
+                    fi; \
+                    mkdir -p "$nfc")
+                    """)
+                } else {
+                    statements.append("mkdir -p '\(escNFC)'")
+                }
             }
-            let command = "mkdir -p \(escapedPaths.joined(separator: " "))"
             
+            let command = statements.joined(separator: " && ")
             let (code, _, error) = await Shell.runAsync(adbPath, args: deviceArgs(["shell", command]))
             if code != 0 {
-                print("⚠️ Batch mkdir failed for chunk: \(error)")
+                AppLogger.log("⚠️ Batch mkdir failed for chunk: \(error)", level: .warning)
             }
         }
     }
@@ -3196,57 +3291,89 @@ class ADBManager {
         cancellationCheck: @escaping () -> Bool = { false }
     ) async throws {
         let adbPath = getADBPath()
+        let normalizedDest = destinationPath.precomposedStringWithCanonicalMapping
+
+        // Guard against copying a file/folder onto its exact canonical self
+        let canonSrc = AndroidStorageAccess.canonicalPath(sourcePath).precomposedStringWithCanonicalMapping
+        let canonDst = AndroidStorageAccess.canonicalPath(normalizedDest).precomposedStringWithCanonicalMapping
+        if canonSrc == canonDst {
+            return
+        }
+
+        let nfcSrc = sourcePath.precomposedStringWithCanonicalMapping
+        let nfdSrc = sourcePath.decomposedStringWithCanonicalMapping
+        let altSrc = (sourcePath == nfcSrc) ? nfdSrc : nfcSrc
+
         let escapedSource = sourcePath.replacingOccurrences(of: "'", with: "'\\''")
-        let escapedDest = destinationPath.replacingOccurrences(of: "'", with: "'\\''")
-        
+        let escapedAltSource = altSrc.replacingOccurrences(of: "'", with: "'\\''")
+        let escapedDest = normalizedDest.replacingOccurrences(of: "'", with: "'\\''")
+        let parentDir = (normalizedDest as NSString).deletingLastPathComponent
+        let escapedParent = parentDir.replacingOccurrences(of: "'", with: "'\\''")
+
+        if cancellationCheck() {
+            throw NSError(domain: "ADB", code: -999, userInfo: [NSLocalizedDescriptionKey: "Operation cancelled"])
+        }
+
         if isDirectory {
-            // Step 1: Create the directory (fast)
-            if cancellationCheck() {
-                throw NSError(domain: "ADB", code: -999, userInfo: [NSLocalizedDescriptionKey: "Operation cancelled"])
-            }
-            let mkdirCmd = "mkdir -p '\(escapedDest)'"
-            let (mkdirCode, _, mkdirError) = await Shell.runAsync(adbPath, args: deviceArgs(["shell", mkdirCmd]))
-            
-            if mkdirCode != 0 {
-                throw NSError(domain: "ADB", code: Int(mkdirCode), userInfo: [NSLocalizedDescriptionKey: mkdirError.isEmpty ? "Failed to create folder" : mkdirError])
-            }
-            
-            // Step 2: Copy contents if any exist (separate call, only if needed)
-            if cancellationCheck() {
-                throw NSError(domain: "ADB", code: -999, userInfo: [NSLocalizedDescriptionKey: "Operation cancelled"])
-            }
-            let cpCmd = "cp -r '\(escapedSource)/.' '\(escapedDest)/' 2>/dev/null || true"
-            let (code, _, _, _) = await Shell.runWithProgressCancellable(
+            // Single-command directory copy with NFC/NFD fallback and tar fallback for Toybox/FUSE quirks
+            let cpCmd = """
+            src='\(escapedSource)'; \
+            if [ ! -e "$src" ] && [ -e '\(escapedAltSource)' ]; then src='\(escapedAltSource)'; fi; \
+            if [ ! -d "$src" ]; then echo "No such file or directory" >&2; exit 2; fi; \
+            mkdir -p '\(escapedDest)' && \
+            (cp -rf "$src/." '\(escapedDest)/' 2>/dev/null || (tar -cf - -C "$src" . 2>/dev/null | tar -xf - -C '\(escapedDest)')) && \
+            [ -d '\(escapedDest)' ]
+            """
+
+            let (code, output, stderr, _) = await Shell.runWithProgressCancellable(
                 adbPath,
                 args: deviceArgs(["shell", cpCmd]),
                 progressCallback: { _ in },
                 cancellationCheck: cancellationCheck
             )
-            
+
             if cancellationCheck() {
                 throw NSError(domain: "ADB", code: -999, userInfo: [NSLocalizedDescriptionKey: "Operation cancelled"])
             }
-            // Ignore result - empty folder might fail but that's OK
-            
+
+            if code != 0 {
+                let error = AndroidStorageAccess.commandError((code, output, stderr), fallback: "Failed to copy folder")
+                AppLogger.log("❌ [copyFile] Directory copy failed (code \(code)): \(error)", level: .error)
+                if error.contains("Read-only") {
+                    throw NSError(domain: "ADB", code: Int(code), userInfo: [NSLocalizedDescriptionKey: "Cannot copy folder: File system is read-only"])
+                } else if error.contains("Permission denied") {
+                    throw NSError(domain: "ADB", code: Int(code), userInfo: [NSLocalizedDescriptionKey: "Cannot copy folder: Permission denied"])
+                } else if error.contains("No such file") {
+                    throw NSError(domain: "ADB", code: Int(code), userInfo: [NSLocalizedDescriptionKey: "Source folder not found"])
+                } else {
+                    throw NSError(domain: "ADB", code: Int(code), userInfo: [NSLocalizedDescriptionKey: error.isEmpty ? "Failed to copy folder" : error])
+                }
+            }
         } else {
-            // Regular file copy
-            if cancellationCheck() {
-                throw NSError(domain: "ADB", code: -999, userInfo: [NSLocalizedDescriptionKey: "Operation cancelled"])
-            }
-            let command = "cp '\(escapedSource)' '\(escapedDest)'"
-            let (code, output, error, _) = await Shell.runWithProgressCancellable(
+            // Regular file copy with NFC/NFD source fallback, destination pre-removal for FUSE overwrite, and stream fallback
+            let command = """
+            src='\(escapedSource)'; \
+            if [ ! -e "$src" ] && [ -e '\(escapedAltSource)' ]; then src='\(escapedAltSource)'; fi; \
+            if [ ! -e "$src" ]; then echo "No such file or directory" >&2; exit 2; fi; \
+            mkdir -p '\(escapedParent)' && \
+            (rm -f '\(escapedDest)' 2>/dev/null || true) && \
+            (cp -f "$src" '\(escapedDest)' 2>/dev/null || cat "$src" > '\(escapedDest)') && \
+            [ -e '\(escapedDest)' ]
+            """
+            let (code, output, stderr, _) = await Shell.runWithProgressCancellable(
                 adbPath,
                 args: deviceArgs(["shell", command]),
                 progressCallback: { _ in },
                 cancellationCheck: cancellationCheck
             )
-            
+
             if cancellationCheck() {
                 throw NSError(domain: "ADB", code: -999, userInfo: [NSLocalizedDescriptionKey: "Operation cancelled"])
             }
-            
+
             if code != 0 {
-                print("❌ Copy failed: code=\(code), error=\(error), output=\(output)")
+                let error = AndroidStorageAccess.commandError((code, output, stderr), fallback: "Failed to copy file")
+                AppLogger.log("❌ [copyFile] File copy failed (code \(code)): \(error)", level: .error)
                 if error.contains("Read-only") {
                     throw NSError(domain: "ADB", code: Int(code), userInfo: [NSLocalizedDescriptionKey: "Cannot copy: File system is read-only"])
                 } else if error.contains("Permission denied") {
@@ -3258,6 +3385,44 @@ class ADBManager {
                 }
             }
         }
+    }
+
+    /// Copies a batch of regular files in a single ADB shell call for speed.
+    /// Returns true if the entire batch succeeded in one shot, or false if the caller should fall back to per-file copy.
+    static func batchCopyRegularFiles(_ items: [(source: String, dest: String)]) async -> Bool {
+        guard !items.isEmpty else { return true }
+        let adbPath = getADBPath()
+        guard !adbPath.isEmpty else { return false }
+
+        var subcommands: [String] = []
+        subcommands.reserveCapacity(items.count)
+        for item in items {
+            let normDest = item.dest.precomposedStringWithCanonicalMapping
+            let canonSrc = AndroidStorageAccess.canonicalPath(item.source).precomposedStringWithCanonicalMapping
+            let canonDst = AndroidStorageAccess.canonicalPath(normDest).precomposedStringWithCanonicalMapping
+            if canonSrc == canonDst { continue }
+
+            let nfcSrc = item.source.precomposedStringWithCanonicalMapping
+            let nfdSrc = item.source.decomposedStringWithCanonicalMapping
+            let altSrc = (item.source == nfcSrc) ? nfdSrc : nfcSrc
+
+            let escSrc = item.source.replacingOccurrences(of: "'", with: "'\\''")
+            let escAlt = altSrc.replacingOccurrences(of: "'", with: "'\\''")
+            let escDst = normDest.replacingOccurrences(of: "'", with: "'\\''")
+
+            subcommands.append(
+                "(src='\(escSrc)'; if [ ! -e \"$src\" ] && [ -e '\(escAlt)' ]; then src='\(escAlt)'; fi; (rm -f '\(escDst)' 2>/dev/null || true) && (cp -f \"$src\" '\(escDst)' 2>/dev/null || cat \"$src\" > '\(escDst)') && [ -e '\(escDst)' ])"
+            )
+        }
+        guard !subcommands.isEmpty else { return true }
+
+        let combined = subcommands.joined(separator: " && ")
+        let (code, _, _) = await Shell.runAsyncWithTimeout(
+            adbPath,
+            args: deviceArgs(["shell", combined]),
+            timeoutSeconds: 60.0
+        )
+        return code == 0
     }
     
 

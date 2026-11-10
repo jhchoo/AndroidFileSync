@@ -153,7 +153,7 @@ struct FileBrowserView: View {
             fileListOrEmptyState
             
             // Selection toolbar - only show when there are selected files in current view
-            let selectedFilesList = files.filter { selectedFiles.contains($0.id) }
+            let selectedFilesList = selectedFiles.isEmpty ? [] : files.filter { selectedFiles.contains($0.id) }
             if !selectedFilesList.isEmpty {
                 SelectionToolbar(
                     selectedFiles: selectedFilesList,
@@ -683,7 +683,7 @@ struct FileBrowserView: View {
     // MARK: - View Mode Toggle
 
     private var allFilesSelected: Bool {
-        !files.isEmpty && files.allSatisfy { selectedFiles.contains($0.id) }
+        !files.isEmpty && selectedFiles.count >= files.count && files.allSatisfy { selectedFiles.contains($0.id) }
     }
 
     private var selectionMenu: some View {
@@ -873,13 +873,19 @@ struct FileBrowserView: View {
                                     frames: [String: CGRect] = [:], selectedIDs: Set<String>? = nil,
                                     scrollTo: ((String) -> Void)? = nil) -> some View {
         let selection = selectedIDs ?? selectedFiles
+        let mappedFrames: [Int: CGRect] = (isGrid && !frames.isEmpty)
+            ? Dictionary(uniqueKeysWithValues: files.enumerated().compactMap { index, file in
+                frames[file.id].map { (index, $0) }
+            })
+            : [:]
+        let selectedIdxSet: Set<Int> = selection.isEmpty
+            ? []
+            : Set(files.indices.filter { selection.contains(files[$0].id) })
         return FileBrowserKeyboardNavigation(isGrid: isGrid, onMove: { direction, flags in
             let index = handleSelectionMove(direction, modifiers: flags, columns: columns)
             if let index { scrollTo?(files[index].id) }
             return index
-        }, itemFrames: Dictionary(uniqueKeysWithValues: files.enumerated().compactMap { index, file in
-            frames[file.id].map { (index, $0) }
-        }), selectedIndexes: Set(files.indices.filter { selection.contains(files[$0].id) }),
+        }, itemFrames: mappedFrames, selectedIndexes: selectedIdxSet,
             isEnabled: isInteractionEnabled, onClick: handleClick, onOpen: handleOpen,
             onRename: handleRenameSelection,
             onSpace: handleSpaceAction,
@@ -991,7 +997,11 @@ struct FileBrowserView: View {
                 }
                 .scrollContentBackground(.hidden)
                 .coordinateSpace(name: "fileBrowserGrid")
-                .onPreferenceChange(FileBrowserItemFrames.self) { gridItemFrames = $0 }
+                .onPreferenceChange(FileBrowserItemFrames.self) { newFrames in
+                    if gridItemFrames != newFrames {
+                        gridItemFrames = newFrames
+                    }
+                }
                 .background(
                     keyboardNavigation(isGrid: true, columns: columnCount, frames: frames, selectedIDs: selection, scrollTo: { proxy.scrollTo($0) })
                 )
@@ -1168,7 +1178,6 @@ struct FileBrowserView: View {
                                 } label: {
                                     Label(pasteMenuTitle, systemImage: clipboardOperation == .cut ? "scissors" : "doc.on.clipboard")
                                 }
-                                .keyboardShortcut("v", modifiers: .command)
                                 .disabled(onPaste == nil)
                             }
                             
@@ -1312,7 +1321,6 @@ struct FileBrowserView: View {
                     systemImage: clipboardOperation == .cut ? "scissors" : "doc.on.clipboard"
                 )
             }
-            .keyboardShortcut("v", modifiers: .command)
             .disabled(onPaste == nil)
         }
         
@@ -1373,7 +1381,6 @@ struct FileBrowserView: View {
             } label: {
                 Label("New Folder", systemImage: "folder.badge.plus")
             }
-            .keyboardShortcut("n", modifiers: [.command, .shift])
             
             Divider()
         }
@@ -1386,7 +1393,6 @@ struct FileBrowserView: View {
                 systemImage: clipboardOperation == .cut ? "scissors" : "doc.on.clipboard"
             )
         }
-        .keyboardShortcut("v", modifiers: .command)
         .disabled(clipboardCount == 0 || onPaste == nil)
     }
 
@@ -1459,8 +1465,7 @@ struct FileBrowserView: View {
             }
         }
         
-        let ext = (file.name as NSString).pathExtension.lowercased()
-        switch ext {
+        switch file.pathExtension {
         case "jpg", "jpeg", "png", "gif", "heic", "webp": return "photo"
         case "mp4", "mov", "avi", "mkv": return "film"
         case "mp3", "m4a", "wav", "flac": return "music.note"
@@ -1474,8 +1479,7 @@ struct FileBrowserView: View {
     private func getFileColor(for file: UnifiedFile) -> Color {
         if file.isDirectory { return .blue }
         
-        let ext = (file.name as NSString).pathExtension.lowercased()
-        switch ext {
+        switch file.pathExtension {
         case "jpg", "jpeg", "png", "gif", "heic", "webp": return .purple
         case "mp4", "mov", "avi", "mkv": return .red
         case "mp3", "m4a", "wav", "flac": return .pink
@@ -1486,7 +1490,7 @@ struct FileBrowserView: View {
     }
     
     private func getFileType(for file: UnifiedFile) -> String {
-        let ext = (file.name as NSString).pathExtension.lowercased()
+        let ext = file.pathExtension
         if ext.isEmpty { return "File" }
         return ext.uppercased()
     }

@@ -576,6 +576,7 @@ struct ContentView: View {
                     Task {
                         try? await fileActionManager.resumePaste(resolution: .replace)
                         await loadFiles()
+                        if isDualPaneEnabled { await loadSecondaryFiles() }
                         await deviceManager.fetchStorageInfo()
                     }
                 }
@@ -583,6 +584,7 @@ struct ContentView: View {
                     Task {
                         try? await fileActionManager.resumePaste(resolution: .keepBoth)
                         await loadFiles()
+                        if isDualPaneEnabled { await loadSecondaryFiles() }
                         await deviceManager.fetchStorageInfo()
                     }
                 }
@@ -590,6 +592,7 @@ struct ContentView: View {
                     Task {
                         try? await fileActionManager.resumePaste(resolution: .skip)
                         await loadFiles()
+                        if isDualPaneEnabled { await loadSecondaryFiles() }
                         await deviceManager.fetchStorageInfo()
                     }
                 }
@@ -651,6 +654,12 @@ struct ContentView: View {
             .onChange(of: fileActionManager.pasteConflicts.count) { newCount in
                 showConflictAlert = newCount > 0
             }
+            .onChange(of: fileActionManager.lastError) { newError in
+                if let err = newError, !err.isEmpty, !showErrorAlert {
+                    errorMessage = err
+                    showErrorAlert = true
+                }
+            }
             .onChange(of: appManager.globalResultMessage) { newValue in
                 guard let message = newValue, !message.isEmpty else { return }
                 globalResultAlertMessage = message
@@ -683,6 +692,15 @@ struct ContentView: View {
                 // Storage discovery must also run when the internal listing fails.
                 Task { await deviceManager.detectSDCard() }
                 await loadFiles()
+                if isDualPaneEnabled {
+                    if secondaryPath == "/sdcard" || secondaryPath.isEmpty {
+                        secondaryPath = path
+                    } else if AndroidStorageAccess.storageRoot(for: secondaryPath) != nil {
+                        let canon = AndroidStorageAccess.canonicalPath(secondaryPath)
+                        secondaryPath = AndroidStorageAccess.path(canon, through: path)
+                    }
+                    await loadSecondaryFiles()
+                }
             }
             .onChange(of: deviceManager.isConnected) { connected in
                 if !connected {
@@ -768,6 +786,16 @@ struct ContentView: View {
             .onChange(of: searchQuery) { _ in updateDisplayedFiles() }
             .onChange(of: secondaryFiles) { _ in updateSecondaryDisplayedFiles() }
             .onChange(of: secondarySearchQuery) { _ in updateSecondaryDisplayedFiles() }
+            .onChange(of: selectedFiles) { newSelection in
+                if !newSelection.isEmpty {
+                    activePane = .primary
+                }
+            }
+            .onChange(of: secondarySelectedFiles) { newSelection in
+                if !newSelection.isEmpty && isDualPaneEnabled {
+                    activePane = .secondary
+                }
+            }
             .onChange(of: isDualPaneEnabled) { enabled in
                 if enabled {
                     if secondaryFiles.isEmpty {
@@ -1402,8 +1430,14 @@ struct ContentView: View {
             onBatchDelete: { handleSecondaryBatchDelete() },
             onBatchDownload: { handleBatchDownload() },
             onBatchChangeExtension: { ext in handleBatchChangeExtension(ext, inSecondary: true) },
-            onCopy: { files in fileActionManager.copyToClipboard(files) },
-            onCut: { files in fileActionManager.cutToClipboard(files) },
+            onCopy: { files in
+                activePane = .secondary
+                fileActionManager.copyToClipboard(files)
+            },
+            onCut: { files in
+                activePane = .secondary
+                fileActionManager.cutToClipboard(files)
+            },
             onDownloadFolder: handleFolderDownload,
             onAddToSidebar: { folder in
                 sidebarManager.addItem(
@@ -1418,6 +1452,7 @@ struct ContentView: View {
             clipboardCount: fileActionManager.clipboard.count,
             clipboardOperation: fileActionManager.clipboardOperation,
             onPaste: {
+                activePane = .secondary
                 Task {
                     do {
                         try await fileActionManager.paste(to: secondaryPath)
@@ -1431,6 +1466,7 @@ struct ContentView: View {
                 }
             },
             onPasteToFolder: { targetFolder in
+                activePane = .secondary
                 Task {
                     do {
                         try await fileActionManager.paste(to: targetFolder)
@@ -1523,7 +1559,6 @@ struct ContentView: View {
                 self.secondaryStorageRepairAvailable = false
                 self.secondaryIsLoading = false
                 self.secondaryIsLoadingMoreFiles = false
-                self.updateSecondaryDisplayedFiles()
             }
         } catch {
             await MainActor.run {
@@ -1536,7 +1571,6 @@ struct ContentView: View {
                 self.secondarySelectedFiles.removeAll()
                 self.secondaryIsLoading = false
                 self.secondaryIsLoadingMoreFiles = false
-                self.updateSecondaryDisplayedFiles()
             }
         }
     }
@@ -1609,7 +1643,6 @@ struct ContentView: View {
 
         let deletedIDs = Set(filesToDelete.map { $0.id })
         secondaryFiles.removeAll { deletedIDs.contains($0.id) }
-        updateSecondaryDisplayedFiles()
         secondarySelectedFiles.removeAll()
 
         Task {
@@ -1633,7 +1666,6 @@ struct ContentView: View {
 
         let deletedIDs = Set(targets.map { $0.id })
         secondaryFiles.removeAll { deletedIDs.contains($0.id) }
-        updateSecondaryDisplayedFiles()
         secondarySelectedFiles.subtract(deletedIDs)
 
         Task {
@@ -1654,8 +1686,18 @@ struct ContentView: View {
     // MARK: - Global Actions
 
     private func handleGlobalCopy() {
-        let sourceFiles = (activePane == .secondary && isDualPaneEnabled) ? secondaryFiles : files
-        let sourceSelected = (activePane == .secondary && isDualPaneEnabled) ? secondarySelectedFiles : selectedFiles
+        var useSecondary = (activePane == .secondary && isDualPaneEnabled)
+        if isDualPaneEnabled {
+            if useSecondary && secondarySelectedFiles.isEmpty && !selectedFiles.isEmpty {
+                useSecondary = false
+                activePane = .primary
+            } else if !useSecondary && selectedFiles.isEmpty && !secondarySelectedFiles.isEmpty {
+                useSecondary = true
+                activePane = .secondary
+            }
+        }
+        let sourceFiles = useSecondary ? secondaryFiles : files
+        let sourceSelected = useSecondary ? secondarySelectedFiles : selectedFiles
         let items = sourceFiles.filter { sourceSelected.contains($0.id) }
         if items.isEmpty {
             print("⌘C: No matching files in active listing (selectedFiles=\(sourceSelected.count), files=\(sourceFiles.count))")
@@ -1666,8 +1708,18 @@ struct ContentView: View {
     }
 
     private func handleGlobalCut() {
-        let sourceFiles = (activePane == .secondary && isDualPaneEnabled) ? secondaryFiles : files
-        let sourceSelected = (activePane == .secondary && isDualPaneEnabled) ? secondarySelectedFiles : selectedFiles
+        var useSecondary = (activePane == .secondary && isDualPaneEnabled)
+        if isDualPaneEnabled {
+            if useSecondary && secondarySelectedFiles.isEmpty && !selectedFiles.isEmpty {
+                useSecondary = false
+                activePane = .primary
+            } else if !useSecondary && selectedFiles.isEmpty && !secondarySelectedFiles.isEmpty {
+                useSecondary = true
+                activePane = .secondary
+            }
+        }
+        let sourceFiles = useSecondary ? secondaryFiles : files
+        let sourceSelected = useSecondary ? secondarySelectedFiles : selectedFiles
         let items = sourceFiles.filter { sourceSelected.contains($0.id) }
         if items.isEmpty {
             print("⌘X: No matching files in active listing")
@@ -2448,7 +2500,8 @@ struct ContentView: View {
 
     private func handleUpload(urls: [URL], destinationPath: String? = nil) {
         let manager = self.uploadManager
-        let path = destinationPath ?? self.currentPath
+        let rawPath = destinationPath ?? self.currentPath
+        let path = rawPath.precomposedStringWithCanonicalMapping
 
         // Show immediate feedback so the user doesn't stare at a blank screen
         Task { @MainActor in
@@ -2471,7 +2524,9 @@ struct ContentView: View {
                 if isDir.boolValue {
                     AppLogger.log("📂 [handleUpload] Processing local directory: \(url.path)")
                     let basePath = url.path
-                    let remoteFolderBase = (path.hasSuffix("/") ? path : path + "/") + url.lastPathComponent
+                    let (safeFolderName, _) = FileNameHelper.getSafeFilename(url.lastPathComponent)
+                    let nfcFolderName = safeFolderName.precomposedStringWithCanonicalMapping
+                    let remoteFolderBase = (path.hasSuffix("/") ? path : path + "/") + nfcFolderName
                     remoteDirsToCreate.insert(remoteFolderBase)
 
                     guard let enumerator = FileManager.default.enumerator(
@@ -2496,13 +2551,21 @@ struct ContentView: View {
 
                         guard rv.isRegularFile == true else { continue }
 
-                        let relativePath = String(fileURL.path.dropFirst(basePath.count + 1))
-                        let remoteFilePath = remoteFolderBase + "/" + relativePath
-                        let remoteDir = (remoteFilePath as NSString).deletingLastPathComponent
+                        let relativeRaw = String(fileURL.path.dropFirst(basePath.count + 1))
+                        let relativeComponents = relativeRaw.split(separator: "/").map { part -> String in
+                            let (safePart, _) = FileNameHelper.getSafeFilename(String(part))
+                            return safePart.precomposedStringWithCanonicalMapping
+                        }
+                        guard !relativeComponents.isEmpty else { continue }
+
+                        let fileName = relativeComponents.last!
+                        let subDirs = relativeComponents.dropLast()
+                        let remoteDir = subDirs.isEmpty
+                            ? remoteFolderBase
+                            : remoteFolderBase + "/" + subDirs.joined(separator: "/")
                         remoteDirsToCreate.insert(remoteDir)
 
                         let size = UInt64(rv.fileSize ?? 0)
-                        let fileName = (relativePath as NSString).lastPathComponent
                         allItems.append((localPath: fileURL.path, fileName: fileName, fileSize: size, devicePath: remoteDir))
                         folderFilesCount += 1
                     }
@@ -2514,7 +2577,9 @@ struct ContentView: View {
                         AppLogger.log("⚠️ [handleUpload] Failed to retrieve attributes for local file: \(url.path)", level: .warning)
                         continue
                     }
-                    allItems.append((localPath: url.path, fileName: url.lastPathComponent, fileSize: size, devicePath: path))
+                    let (safeFileName, _) = FileNameHelper.getSafeFilename(url.lastPathComponent)
+                    let nfcFileName = safeFileName.precomposedStringWithCanonicalMapping
+                    allItems.append((localPath: url.path, fileName: nfcFileName, fileSize: size, devicePath: path))
                 }
             }
 
@@ -2529,10 +2594,12 @@ struct ContentView: View {
             let adb = ADBManager.getADBPath()
 
             func fullDevicePath(_ item: (localPath: String, fileName: String, fileSize: UInt64, devicePath: String)) -> String {
+                let nfcDir = item.devicePath.precomposedStringWithCanonicalMapping
                 let (safeName, _) = FileNameHelper.getSafeFilename(item.fileName)
-                return item.devicePath.hasSuffix("/")
-                    ? item.devicePath + safeName
-                    : item.devicePath + "/" + safeName
+                let nfcName = safeName.precomposedStringWithCanonicalMapping
+                return nfcDir.hasSuffix("/")
+                    ? nfcDir + nfcName
+                    : nfcDir + "/" + nfcName
             }
 
             await MainActor.run {
@@ -2577,7 +2644,12 @@ struct ContentView: View {
 
             if !conflictingPaths.isEmpty {
                 let conflictNames = allItems
-                    .filter { conflictingPaths.contains(fullDevicePath($0).precomposedStringWithCanonicalMapping) }
+                    .filter { item in
+                        let p = fullDevicePath(item)
+                        return conflictingPaths.contains(p) ||
+                               conflictingPaths.contains(p.precomposedStringWithCanonicalMapping) ||
+                               conflictingPaths.contains(p.decomposedStringWithCanonicalMapping)
+                    }
                     .map { $0.fileName }
 
                 try? await Task.sleep(nanoseconds: 350_000_000)
@@ -2589,7 +2661,12 @@ struct ContentView: View {
                 switch choice {
                 case .replace: break
                 case .skip:
-                    allItems = allItems.filter { !conflictingPaths.contains(fullDevicePath($0)) }
+                    allItems = allItems.filter { item in
+                        let p = fullDevicePath(item)
+                        return !conflictingPaths.contains(p) &&
+                               !conflictingPaths.contains(p.precomposedStringWithCanonicalMapping) &&
+                               !conflictingPaths.contains(p.decomposedStringWithCanonicalMapping)
+                    }
                 case .cancel: return
                 }
             }
@@ -2639,8 +2716,6 @@ struct ContentView: View {
     private func handleDelete(_ file: UnifiedFile) {
         files.removeAll { $0.id == file.id }
         secondaryFiles.removeAll { $0.id == file.id }
-        updateDisplayedFiles()
-        updateSecondaryDisplayedFiles()
         selectedFiles.remove(file.id)
         secondarySelectedFiles.remove(file.id)
         
@@ -2690,7 +2765,6 @@ struct ContentView: View {
         
         let deletedIDs = Set(filesToDelete.map { $0.id })
         files.removeAll { deletedIDs.contains($0.id) }
-        updateDisplayedFiles()
         selectedFiles.removeAll()
         
         Task {
@@ -2714,7 +2788,6 @@ struct ContentView: View {
         
         let deletedIDs = Set(targets.map { $0.id })
         files.removeAll { deletedIDs.contains($0.id) }
-        updateDisplayedFiles()
         selectedFiles.subtract(deletedIDs)
         
         Task {
