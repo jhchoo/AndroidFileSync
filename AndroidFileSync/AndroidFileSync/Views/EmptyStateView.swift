@@ -481,7 +481,7 @@ private struct ReportIssueInlineView: View {
     @ObservedObject var diagnosticsControl: DiagnosticsControl
     @State private var showPopover = false
 
-    private let githubIssueURL = URL(string: "https://github.com/Santosh7017/AndroidFileSync/issues/new")!
+    private let githubIssueURL = URL(string: "https://github.com/jhchoo/AndroidFileSync/issues/new")!
 
     var body: some View {
         Button {

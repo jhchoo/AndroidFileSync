@@ -9,7 +9,7 @@ import AppKit
 struct ReportIssuePopoverView: View {
     @ObservedObject var diagnosticsControl: DiagnosticsControl
 
-    private let githubIssueURL = URL(string: "https://github.com/Santosh7017/AndroidFileSync/issues/new")!
+    private let githubIssueURL = URL(string: "https://github.com/jhchoo/AndroidFileSync/issues/new")!
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {

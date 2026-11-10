@@ -1,7 +1,7 @@
 import Foundation
 import AppKit
 
-struct QuickAccessItem: Identifiable, Codable {
+struct QuickAccessItem: Identifiable, Codable, Equatable {
     /// Stable ID — use the path so items survive app restarts
     var id: String { path }
     let name: String
@@ -28,6 +28,21 @@ struct QuickAccessItem: Identifiable, Codable {
         QuickAccessItem(name: "Movies",           icon: "film.fill",             path: "/storage/emulated/0/Movies",    color: "cyan",   isBuiltIn: true),
         QuickAccessItem(name: "Documents",        icon: "doc.fill",              path: "/storage/emulated/0/Documents", color: "yellow", isBuiltIn: true),
     ]
+}
+
+struct SidebarGroup: Identifiable, Codable, Equatable {
+    let id: String
+    var name: String
+    /// true = default group that cannot be deleted
+    var isDefault: Bool
+    var items: [QuickAccessItem]
+
+    init(id: String = UUID().uuidString, name: String, isDefault: Bool = false, items: [QuickAccessItem] = []) {
+        self.id = id
+        self.name = name
+        self.isDefault = isDefault
+        self.items = items
+    }
 }
 
 extension String {

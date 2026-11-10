@@ -15,8 +15,8 @@ final class SupportPromptManager: ObservableObject {
     private let feedbackSnoozedUntilSessionKey = "supportPromptFeedbackSnoozedUntilSession"
     private let completedKey = "supportPromptCompleted"
 
-    private let repoURL = URL(string: "https://github.com/Santosh7017/AndroidFileSync")!
-    private let feedbackURL = URL(string: "https://github.com/Santosh7017/AndroidFileSync/issues/new")!
+    private let repoURL = URL(string: "https://github.com/jhchoo/AndroidFileSync")!
+    private let feedbackURL = URL(string: "https://github.com/jhchoo/AndroidFileSync/issues/new")!
 
     private let promptDelay: TimeInterval = 60
     private let snoozeInterval: TimeInterval = 7 * 24 * 60 * 60
