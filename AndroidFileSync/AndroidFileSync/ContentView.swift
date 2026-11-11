@@ -510,8 +510,10 @@ struct ContentView: View {
                     Button("") { handleSelectAll() }.keyboardShortcut("a", modifiers: .command)
                     Button("") { handleDeselectAll() }.keyboardShortcut("a", modifiers: [.command, .shift])
                     Button("") { handleNavigateUp() }.keyboardShortcut(.upArrow, modifiers: .command)
+                    Button("") { handleNavigateUp() }.keyboardShortcut(.leftArrow, modifiers: .command)
+                    Button("") { handleNavigateUp() }.keyboardShortcut("[", modifiers: .command)
                     Button("") { handleOpenSelected() }.keyboardShortcut(.downArrow, modifiers: .command)
-                    Button("") { navigateBack() }.keyboardShortcut("[", modifiers: .command)
+                    Button("") { handleEnterFolder() }.keyboardShortcut(.rightArrow, modifiers: .command)
                     Button("") { navigateForward() }.keyboardShortcut("]", modifiers: .command)
 
                     // ── File actions ──────────────────────────────────────
@@ -1333,10 +1335,8 @@ struct ContentView: View {
             files: displayedFiles,
             currentPath: currentPath,
             isLoading: isLoading,
-            canGoBack: !pathHistory.isEmpty,
             selectedFiles: $selectedFiles,
             onNavigate: navigateTo,
-            onGoBack: navigateBack,
             onDownload: handleDownload,
             onUpload: { urls in handleUpload(urls: urls, destinationPath: currentPath) },
             onDelete: handleDelete,
@@ -1422,10 +1422,8 @@ struct ContentView: View {
             files: secondaryDisplayedFiles,
             currentPath: secondaryPath,
             isLoading: secondaryIsLoading,
-            canGoBack: !secondaryPathHistory.isEmpty,
             selectedFiles: $secondarySelectedFiles,
             onNavigate: navigateSecondaryTo,
-            onGoBack: navigateSecondaryBack,
             onDownload: handleDownload,
             onUpload: { urls in handleUpload(urls: urls, destinationPath: secondaryPath) },
             onDelete: handleDelete,
@@ -1824,7 +1822,9 @@ struct ContentView: View {
         guard activeAppFilter == nil else { return }
         let targetPath = (activePane == .secondary && isDualPaneEnabled) ? secondaryPath : currentPath
         let root = AndroidStorageAccess.storageRoot(for: targetPath) ?? "/storage/emulated/0"
-        guard targetPath != root && targetPath != root + "/" else { return }
+        let canonicalCurrent = AndroidStorageAccess.canonicalPath(targetPath).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let canonicalRoot = AndroidStorageAccess.canonicalPath(root).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard canonicalCurrent != canonicalRoot && targetPath != "/" else { return }
 
         // Navigate to the parent directory
         let parent = (targetPath as NSString).deletingLastPathComponent
@@ -1833,6 +1833,24 @@ struct ContentView: View {
             navigateSecondaryTo(parent)
         } else {
             navigateTo(parent)
+        }
+    }
+
+    private func handleEnterFolder() {
+        guard activeAppFilter == nil else { return }
+        let isSec = (activePane == .secondary && isDualPaneEnabled)
+        let sourceFiles = isSec ? secondaryFiles : files
+        let sourceSelected = isSec ? secondarySelectedFiles : selectedFiles
+
+        guard sourceSelected.count == 1,
+              let firstId = sourceSelected.first,
+              let file = sourceFiles.first(where: { $0.id == firstId }),
+              file.isDirectory else { return }
+
+        if isSec {
+            navigateSecondaryTo(file.path)
+        } else {
+            navigateTo(file.path)
         }
     }
 
@@ -2418,19 +2436,7 @@ struct ContentView: View {
             activeAppFilter = nil
             return
         }
-        if isDualPaneEnabled && activePane == .secondary {
-            if !secondaryPathHistory.isEmpty {
-                navigateSecondaryBack()
-            } else {
-                handleNavigateUp()
-            }
-        } else {
-            if !pathHistory.isEmpty {
-                navigateBack()
-            } else {
-                handleNavigateUp()
-            }
-        }
+        handleNavigateUp()
     }
 
     private func handleMouseForwardButton() {

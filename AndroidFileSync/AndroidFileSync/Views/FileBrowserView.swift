@@ -31,10 +31,11 @@ struct FileBrowserView: View {
     let files: [UnifiedFile]
     let currentPath: String
     let isLoading: Bool
-    let canGoBack: Bool
+    var canGoBack: Bool = false
     @Binding var selectedFiles: Set<String>
     let onNavigate: (String) -> Void
-    let onGoBack: () -> Void
+    var onGoBack: (() -> Void)? = nil
+    var onNavigateUp: (() -> Void)? = nil
     let onDownload: (UnifiedFile) -> Void
     let onUpload: ([URL]) -> Void
     let onDelete: ((UnifiedFile) -> Void)?
@@ -245,9 +246,9 @@ struct FileBrowserView: View {
     
     private var pathBar: some View {
         HStack(spacing: 0) {
-            // Back button
-            if canGoBack {
-                Button(action: onGoBack) {
+            // Parent folder button
+            if canNavigateUp {
+                Button(action: handleNavigateUp) {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(.secondary)
@@ -255,7 +256,7 @@ struct FileBrowserView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Go back")
+                .help("Go to parent folder")
                 .padding(.trailing, 2)
             }
             
@@ -476,6 +477,44 @@ struct FileBrowserView: View {
     private var deviceStorageRoot: String {
         // Keep resolved aliases out of the user-facing breadcrumb.
         AndroidStorageAccess.storageRoot(for: currentPath) ?? "/storage/emulated/0"
+    }
+
+    private var isAtStorageRoot: Bool {
+        let root = deviceStorageRoot
+        let current = currentPath
+        if current == root || current == root + "/" || current == "/" {
+            return true
+        }
+        let canonicalCurrent = AndroidStorageAccess.canonicalPath(current).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let canonicalRoot = AndroidStorageAccess.canonicalPath(root).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return canonicalCurrent == canonicalRoot
+    }
+
+    private var canNavigateUp: Bool {
+        guard !isAtStorageRoot else { return false }
+        let current = currentPath
+        let parent = (current as NSString).deletingLastPathComponent
+        return !parent.isEmpty && parent != current
+    }
+
+    private func handleNavigateUp() {
+        if let onNavigateUp {
+            onNavigateUp()
+            return
+        }
+        guard canNavigateUp else { return }
+        let current = currentPath
+        let parent = (current as NSString).deletingLastPathComponent
+        guard !parent.isEmpty && parent != current else { return }
+        onNavigate(parent)
+    }
+
+    private func handleEnterSelectedFolder() {
+        let targetId = selectedFiles.count == 1 ? selectedFiles.first : selectionNavigator.focusedID
+        guard let id = targetId,
+              let file = files.first(where: { $0.id == id }),
+              file.isDirectory else { return }
+        onNavigate(file.path)
     }
     
     @ViewBuilder
@@ -881,20 +920,32 @@ struct FileBrowserView: View {
         let selectedIdxSet: Set<Int> = selection.isEmpty
             ? []
             : Set(files.indices.filter { selection.contains(files[$0].id) })
-        return FileBrowserKeyboardNavigation(isGrid: isGrid, onMove: { direction, flags in
-            let index = handleSelectionMove(direction, modifiers: flags, columns: columns)
-            if let index { scrollTo?(files[index].id) }
-            return index
-        }, itemFrames: mappedFrames, selectedIndexes: selectedIdxSet,
-            isEnabled: isInteractionEnabled, onClick: handleClick, onOpen: handleOpen,
+        return FileBrowserKeyboardNavigation(
+            isGrid: isGrid,
+            isDualPane: isDualPane,
+            isActivePane: isActivePane,
+            onMove: { direction, flags in
+                let index = handleSelectionMove(direction, modifiers: flags, columns: columns)
+                if let index { scrollTo?(files[index].id) }
+                return index
+            },
+            itemFrames: mappedFrames,
+            selectedIndexes: selectedIdxSet,
+            isEnabled: isInteractionEnabled,
+            onClick: handleClick,
+            onOpen: handleOpen,
             onRename: handleRenameSelection,
             onSpace: handleSpaceAction,
-            onDrag: handleMarquee, onMarqueeChange: { marqueeRectangle = $0 },
+            onNavigateUp: handleNavigateUp,
+            onEnterFolder: handleEnterSelectedFolder,
+            onDrag: handleMarquee,
+            onMarqueeChange: { marqueeRectangle = $0 },
             onItemDrag: { indexes, event, view in
                 let filesToDrag = indexes.sorted().compactMap { files.indices.contains($0) ? files[$0] : nil }
                 guard !filesToDrag.isEmpty else { return }
                 FileDragManager.shared.startDrag(with: filesToDrag, from: view, event: event)
-            })
+            }
+        )
     }
 
     @ViewBuilder

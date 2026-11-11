@@ -4,6 +4,8 @@ import SwiftUI
 /// Owns browser clicks, marquee selection, and keyboard selection together.
 struct FileBrowserKeyboardNavigation: NSViewRepresentable {
     var isGrid: Bool
+    var isDualPane: Bool = false
+    var isActivePane: Bool = false
     var onMove: (MoveCommandDirection, NSEvent.ModifierFlags) -> Int?
     var itemFrames: [Int: CGRect] = [:]
     var selectedIndexes: Set<Int> = []
@@ -12,6 +14,8 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
     var onOpen: ((Int) -> Void)? = nil
     var onRename: (() -> Void)? = nil
     var onSpace: (() -> Void)? = nil
+    var onNavigateUp: (() -> Void)? = nil
+    var onEnterFolder: (() -> Void)? = nil
     var onDrag: ((Set<Int>, Int?, Int?) -> Void)? = nil
     var onMarqueeChange: ((CGRect?) -> Void)? = nil
     var onItemDrag: ((Set<Int>, NSEvent, NSView) -> Void)? = nil
@@ -24,6 +28,8 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
 
     func updateNSView(_ view: KeyboardView, context: Context) {
         view.isGrid = isGrid
+        view.isDualPane = isDualPane
+        view.isActivePane = isActivePane
         view.itemFrames = itemFrames
         view.selectedIndexes = selectedIndexes
         view.isEnabled = isEnabled
@@ -32,6 +38,8 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
         view.onOpen = onOpen
         view.onRename = onRename
         view.onSpace = onSpace
+        view.onNavigateUp = onNavigateUp
+        view.onEnterFolder = onEnterFolder
         view.onDrag = onDrag
         view.onMarqueeChange = onMarqueeChange
         view.onItemDrag = onItemDrag
@@ -43,6 +51,8 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
 
     final class KeyboardView: NSView {
         var isGrid = false
+        var isDualPane = false
+        var isActivePane = false
         var isEnabled = true
         var itemFrames: [Int: CGRect] = [:]
         var selectedIndexes: Set<Int> = []
@@ -51,6 +61,8 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
         var onOpen: ((Int) -> Void)?
         var onRename: (() -> Void)?
         var onSpace: (() -> Void)?
+        var onNavigateUp: (() -> Void)?
+        var onEnterFolder: (() -> Void)?
         var onDrag: ((Set<Int>, Int?, Int?) -> Void)?
         var onMarqueeChange: ((CGRect?) -> Void)?
         var onItemDrag: ((Set<Int>, NSEvent, NSView) -> Void)?
@@ -97,6 +109,25 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
                 return view.subviews.lazy.compactMap { find(in: $0) }.first
             }
             return find(in: content)
+        }
+
+        private func isFirstResponderInBrowser() -> Bool {
+            guard let window else { return false }
+            if window.firstResponder is NSTextView || window.firstResponder is NSTextField {
+                return false
+            }
+            if window.firstResponder === self { return true }
+            if let table = tableView() {
+                if window.firstResponder === table { return true }
+                if let responderView = window.firstResponder as? NSView {
+                    if responderView.isDescendant(of: table) { return true }
+                    if let scroll = table.enclosingScrollView, responderView === scroll || responderView.isDescendant(of: scroll) {
+                        return true
+                    }
+                }
+            }
+            if window.firstResponder === window { return true }
+            return false
         }
 
         private func frames() -> [Int: CGRect] {
@@ -228,8 +259,13 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
             }
             guard event.type == .keyDown,
                   !(window.firstResponder is NSTextView), !(window.firstResponder is NSTextField),
-                  window.firstResponder === self || (!isGrid && window.firstResponder === tableView()),
                   flags.intersection([.command, .option, .control]).isEmpty else { return event }
+
+            if isDualPane && !isActivePane {
+                return event
+            }
+
+            guard isFirstResponderInBrowser() else { return event }
 
             // Enter / Return key (36 = Return, 76 = Keypad Enter) -> Rename
             if event.keyCode == 36 || event.keyCode == 76 {
@@ -243,6 +279,30 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
             if event.keyCode == 49 {
                 if let onSpace {
                     onSpace()
+                    return nil
+                }
+            }
+
+            // Backspace / Delete key (51) -> Navigate up to parent folder
+            if event.keyCode == 51 {
+                if let onNavigateUp {
+                    onNavigateUp()
+                    return nil
+                }
+            }
+
+            // Left Arrow key (123) in list view -> Navigate up to parent folder
+            if event.keyCode == 123 && !isGrid {
+                if let onNavigateUp {
+                    onNavigateUp()
+                    return nil
+                }
+            }
+
+            // Right Arrow key (124) in list view -> Enter selected folder
+            if event.keyCode == 124 && !isGrid {
+                if let onEnterFolder {
+                    onEnterFolder()
                     return nil
                 }
             }
