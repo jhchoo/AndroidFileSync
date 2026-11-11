@@ -500,7 +500,12 @@ struct FileBrowserView: View {
             onNavigateUp()
             return
         }
-        guard canNavigateUp else { return }
+        guard canNavigateUp else {
+            if canGoBack, let onGoBack {
+                onGoBack()
+            }
+            return
+        }
         let current = currentPath
         let parent = (current as NSString).deletingLastPathComponent
         guard !parent.isEmpty && parent != current else { return }
@@ -995,6 +1000,7 @@ struct FileBrowserView: View {
         .contextMenu {
             emptyAreaContextMenu
         }
+        .background(keyboardNavigation(isGrid: false))
     }
     
     private static let dateFormatter: DateFormatter = {

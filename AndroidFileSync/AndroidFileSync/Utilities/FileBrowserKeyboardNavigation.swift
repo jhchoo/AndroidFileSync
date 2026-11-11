@@ -43,6 +43,20 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
         view.onDrag = onDrag
         view.onMarqueeChange = onMarqueeChange
         view.onItemDrag = onItemDrag
+
+        if (!view.isDualPane || view.isActivePane) && !view.hasTableView {
+            if let window = view.window,
+               !(window.firstResponder is NSTextView), !(window.firstResponder is NSTextField),
+               (window.firstResponder == nil || window.firstResponder === window || window.firstResponder === window.contentView) {
+                DispatchQueue.main.async {
+                    if let window = view.window,
+                       !(window.firstResponder is NSTextView), !(window.firstResponder is NSTextField),
+                       (window.firstResponder == nil || window.firstResponder === window || window.firstResponder === window.contentView) {
+                        window.makeFirstResponder(view)
+                    }
+                }
+            }
+        }
     }
 
     static func dismantleNSView(_ view: KeyboardView, coordinator: ()) {
@@ -82,12 +96,18 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             removeMonitor()
-            guard window != nil else { return }
+            guard let window else { return }
             monitor = NSEvent.addLocalMonitorForEvents(
                 matching: [.keyDown, .leftMouseDown, .leftMouseDragged, .leftMouseUp, .rightMouseDown]
             ) { [weak self] event in
                 guard let self else { return event }
                 return self.handle(event)
+            }
+            if (!isDualPane || isActivePane) && tableView() == nil {
+                if !(window.firstResponder is NSTextView), !(window.firstResponder is NSTextField),
+                   (window.firstResponder == nil || window.firstResponder === window || window.firstResponder === window.contentView) {
+                    window.makeFirstResponder(self)
+                }
             }
         }
 
@@ -100,7 +120,9 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
             lastMouseDownEvent = nil
         }
 
-        private func tableView() -> NSTableView? {
+        var hasTableView: Bool { tableView() != nil }
+
+        func tableView() -> NSTableView? {
             guard let content = window?.contentView else { return nil }
             let scope = convert(bounds, to: nil)
             func find(in view: NSView) -> NSTableView? {
@@ -117,6 +139,9 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
                 return false
             }
             if window.firstResponder === self { return true }
+            if window.firstResponder == nil || window.firstResponder === window || window.firstResponder === window.contentView {
+                return true
+            }
             if let table = tableView() {
                 if window.firstResponder === table { return true }
                 if let responderView = window.firstResponder as? NSView {
@@ -126,7 +151,11 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
                     }
                 }
             }
-            if window.firstResponder === window { return true }
+            if let responderView = window.firstResponder as? NSView {
+                if responderView.isDescendant(of: self) || self.isDescendant(of: responderView) {
+                    return true
+                }
+            }
             return false
         }
 
@@ -291,8 +320,8 @@ struct FileBrowserKeyboardNavigation: NSViewRepresentable {
                 }
             }
 
-            // Left Arrow key (123) in list view -> Navigate up to parent folder
-            if event.keyCode == 123 && !isGrid {
+            // Left Arrow key (123) in list view or when empty -> Navigate up to parent folder
+            if event.keyCode == 123 && (!isGrid || itemFrames.isEmpty) {
                 if let onNavigateUp {
                     onNavigateUp()
                     return nil
