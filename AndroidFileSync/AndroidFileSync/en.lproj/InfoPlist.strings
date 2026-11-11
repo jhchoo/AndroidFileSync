@@ -1,0 +1,6 @@
+/* English InfoPlist.strings */
+
+"Android File Sync Internal File" = "Android File Sync Internal File";
+"CFBundleName" = "AndroidFileSync";
+"NSHumanReadableCopyright" = "";
+"NSLocalNetworkUsageDescription" = "AndroidFileSync uses your local network to discover, pair with, and transfer files to your Android devices over Wi-Fi.";

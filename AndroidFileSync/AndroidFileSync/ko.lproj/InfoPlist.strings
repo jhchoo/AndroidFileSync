@@ -1,0 +1,6 @@
+/* Korean InfoPlist.strings */
+
+"Android File Sync Internal File" = "Android File Sync Internal File";
+"CFBundleName" = "AndroidFileSync";
+"NSHumanReadableCopyright" = "";
+"NSLocalNetworkUsageDescription" = "AndroidFileSync는 Wi-Fi를 통해 Android 기기를 검색, 페어링 및 파일을 전송하기 위해 로컬 네트워크를 사용합니다.";

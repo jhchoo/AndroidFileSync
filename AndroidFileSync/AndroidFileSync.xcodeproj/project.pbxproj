@@ -19,7 +19,16 @@
 		};
 /* End PBXCopyFilesBuildPhase section */
 
+/* Begin PBXBuildFile section */
+		AA1000052EC66BC4008AABAB /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = AA1000032EC66BC4008AABAB /* Localizable.strings */; };
+		AA1000062EC66BC4008AABAB /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = AA1000042EC66BC4008AABAB /* InfoPlist.strings */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
+		AA1000012EC66BC4008AABAB /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = AndroidFileSync/en.lproj/Localizable.strings; sourceTree = SOURCE_ROOT; };
+		AA1000022EC66BC4008AABAB /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = AndroidFileSync/ko.lproj/Localizable.strings; sourceTree = SOURCE_ROOT; };
+		AA1000072EC66BC4008AABAB /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = AndroidFileSync/en.lproj/InfoPlist.strings; sourceTree = SOURCE_ROOT; };
+		AA1000082EC66BC4008AABAB /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = AndroidFileSync/ko.lproj/InfoPlist.strings; sourceTree = SOURCE_ROOT; };
 		453BAF092EC66BC4008AABAB /* AndroidFileSync.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AndroidFileSync.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		453BAF1D2EC66C1D008AABAB /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
@@ -31,8 +40,6 @@
 				AndroidFileSyncApp.swift,
 				Assets.xcassets,
 				ContentView.swift,
-				InfoPlist.xcstrings,
-				Localizable.xcstrings,
 				Managers/ADBManager.swift,
 				Managers/ADBPairingResponse.swift,
 				Managers/AndroidStorageAccess.swift,
@@ -99,6 +106,27 @@
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
+/* Begin PBXVariantGroup section */
+		AA1000032EC66BC4008AABAB /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				AA1000012EC66BC4008AABAB /* en */,
+				AA1000022EC66BC4008AABAB /* ko */,
+			);
+			name = Localizable.strings;
+			sourceTree = "<group>";
+		};
+		AA1000042EC66BC4008AABAB /* InfoPlist.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				AA1000072EC66BC4008AABAB /* en */,
+				AA1000082EC66BC4008AABAB /* ko */,
+			);
+			name = InfoPlist.strings;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		4581BF032ED0772200D2F9EC /* AndroidFileSync */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
@@ -124,6 +152,8 @@
 		453BAF002EC66BC4008AABAB = {
 			isa = PBXGroup;
 			children = (
+				AA1000032EC66BC4008AABAB /* Localizable.strings */,
+				AA1000042EC66BC4008AABAB /* InfoPlist.strings */,
 				4581BF032ED0772200D2F9EC /* AndroidFileSync */,
 				453BAF1C2EC66C1D008AABAB /* Frameworks */,
 				453BAF0A2EC66BC4008AABAB /* Products */,
@@ -205,10 +235,12 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		453BAF072EC66BC4008AABAB /* Resources */ = {
+				453BAF072EC66BC4008AABAB /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA1000052EC66BC4008AABAB /* Localizable.strings in Resources */,
+				AA1000062EC66BC4008AABAB /* InfoPlist.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -278,7 +310,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = NO;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -336,7 +368,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = NO;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
