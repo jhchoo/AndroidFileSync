@@ -47,33 +47,33 @@ struct FileInfoView: View {
                         HStack {
                             ProgressView()
                                 .scaleEffect(0.7)
-                            Text("Loading info…")
+                            Text("common_loading_info")
                                 .font(.system(size: 12))
                                 .foregroundColor(.secondary)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 20)
                     } else {
-                        infoRow(label: "Kind", value: kindLabel)
-                        infoRow(label: "Size", value: sizeText)
-                        infoRow(label: "Location", value: parentPath)
-                        infoRow(label: "Full Path", value: file.path, selectable: true)
+                        infoRow(label: String.localized("info_label_kind"), value: kindLabel)
+                        infoRow(label: String.localized("info_label_size"), value: sizeText)
+                        infoRow(label: String.localized("info_label_location"), value: parentPath)
+                        infoRow(label: String.localized("info_label_full_path"), value: file.path, selectable: true)
 
                         if let dateStr = formattedDate {
-                            infoRow(label: "Modified", value: dateStr)
+                            infoRow(label: String.localized("info_label_modified"), value: dateStr)
                         } else if let dateStr = info["modified"] {
-                            infoRow(label: "Modified", value: dateStr)
+                            infoRow(label: String.localized("info_label_modified"), value: dateStr)
                         }
 
                         if let perms = info["permissions"] {
                             Divider().padding(.horizontal, 16).padding(.vertical, 4)
-                            infoRow(label: "Permissions", value: perms)
+                            infoRow(label: String.localized("info_label_permissions"), value: perms)
                         }
                         if let owner = info["owner"] {
-                            infoRow(label: "Owner", value: owner)
+                            infoRow(label: String.localized("info_label_owner"), value: owner)
                         }
                         if let group = info["group"] {
-                            infoRow(label: "Group", value: group)
+                            infoRow(label: String.localized("info_label_group"), value: group)
                         }
                     }
                 }
@@ -85,7 +85,7 @@ struct FileInfoView: View {
             // ── Footer ──────────────────────────────────────────────────
             HStack {
                 Spacer()
-                Button("Done") { dismiss() }
+                Button("common_done") { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
             .padding(.horizontal, 20)
@@ -162,34 +162,34 @@ struct FileInfoView: View {
     }
 
     private var kindLabel: String {
-        if file.isDirectory { return "Folder" }
+        if file.isDirectory { return String.localized("info_kind_folder") }
         let ext = (file.name as NSString).pathExtension.lowercased()
-        if ext.isEmpty { return "File" }
+        if ext.isEmpty { return String.localized("info_kind_file") }
         switch ext {
-        case "jpg", "jpeg": return "JPEG Image"
-        case "png": return "PNG Image"
-        case "gif": return "GIF Image"
-        case "heic": return "HEIC Image"
-        case "webp": return "WebP Image"
-        case "mp4": return "MP4 Video"
-        case "mov": return "MOV Video"
-        case "avi": return "AVI Video"
-        case "mkv": return "MKV Video"
-        case "mp3": return "MP3 Audio"
-        case "m4a": return "M4A Audio"
-        case "wav": return "WAV Audio"
-        case "flac": return "FLAC Audio"
-        case "pdf": return "PDF Document"
-        case "zip": return "ZIP Archive"
-        case "rar": return "RAR Archive"
-        case "7z": return "7-Zip Archive"
-        case "apk": return "Android App Package"
-        case "txt": return "Plain Text"
-        case "md": return "Markdown Document"
-        case "doc", "docx": return "Word Document"
-        case "xls", "xlsx": return "Excel Spreadsheet"
-        case "ppt", "pptx": return "PowerPoint Presentation"
-        default: return "\(ext.uppercased()) File"
+        case "jpg", "jpeg": return String.localized("info_kind_jpeg")
+        case "png": return String.localized("info_kind_png")
+        case "gif": return String.localized("info_kind_gif")
+        case "heic": return String.localized("info_kind_heic")
+        case "webp": return String.localized("info_kind_webp")
+        case "mp4": return String.localized("info_kind_mp4")
+        case "mov": return String.localized("info_kind_mov")
+        case "avi": return String.localized("info_kind_avi")
+        case "mkv": return String.localized("info_kind_mkv")
+        case "mp3": return String.localized("info_kind_mp3")
+        case "m4a": return String.localized("info_kind_m4a")
+        case "wav": return String.localized("info_kind_wav")
+        case "flac": return String.localized("info_kind_flac")
+        case "pdf": return String.localized("info_kind_pdf")
+        case "zip": return String.localized("info_kind_zip")
+        case "rar": return String.localized("info_kind_rar")
+        case "7z": return String.localized("info_kind_7z")
+        case "apk": return String.localized("info_kind_apk")
+        case "txt": return String.localized("info_kind_txt")
+        case "md": return String.localized("info_kind_md")
+        case "doc", "docx": return String.localized("info_kind_doc")
+        case "xls", "xlsx": return String.localized("info_kind_xls")
+        case "ppt", "pptx": return String.localized("info_kind_ppt")
+        default: return String.localized("info_kind_custom_format", ext.uppercased())
         }
     }
 

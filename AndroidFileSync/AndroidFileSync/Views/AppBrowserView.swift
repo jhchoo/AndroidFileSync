@@ -22,6 +22,13 @@ struct AppBrowserView: View {
     enum AppSortOption: String, CaseIterable {
         case name    = "Name"
         case package = "Package"
+
+        var localizedKey: LocalizedStringKey {
+            switch self {
+            case .name: return "app_browser_sort_name"
+            case .package: return "app_browser_sort_package"
+            }
+        }
     }
 
     init(appManager: AppManager, initialFilter: AppFilter, deviceName: String, searchQuery: Binding<String>) {
@@ -66,7 +73,7 @@ struct AppBrowserView: View {
                         appManager.confirmBatchAction()
                         selectedPackages = []
                     }
-                    Button("Cancel", role: .cancel) {}
+                    Button("common_cancel", role: .cancel) {}
                 } message: {
                     Text(appManager.batchConfirmMessage)
                 }
@@ -80,7 +87,7 @@ struct AppBrowserView: View {
                     Button(appManager.confirmLabel, role: .destructive) {
                         appManager.confirmSingleAction()
                     }
-                    Button("Cancel", role: .cancel) {}
+                    Button("common_cancel", role: .cancel) {}
                 } message: {
                     Text(appManager.confirmMessage)
                 }
@@ -89,8 +96,8 @@ struct AppBrowserView: View {
             await appManager.fetchApps(filter: selectedFilter)
             selectedPackages = []
         }
-        .alert("Result", isPresented: $appManager.showAlert) {
-            Button("OK", role: .cancel) {}
+        .alert(String.localized("common_result"), isPresented: $appManager.showAlert) {
+            Button("common_ok", role: .cancel) {}
         } message: {
             Text(appManager.alertMessage)
         }
@@ -106,7 +113,7 @@ struct AppBrowserView: View {
             // Filter picker
             Picker("", selection: $selectedFilter) {
                 ForEach(AppFilter.allCases) { filter in
-                    Label(filter.rawValue, systemImage: filter.icon).tag(filter)
+                    Label(LocalizedStringKey(filter.localizedKey), systemImage: filter.icon).tag(filter)
                 }
             }
             .pickerStyle(.segmented)
@@ -118,11 +125,11 @@ struct AppBrowserView: View {
             Button {
                 Task { await handleInstallClick() }
             } label: {
-                Label("Install APK", systemImage: "plus.app")
+                Label("app_browser_btn_install_apk", systemImage: "plus.app")
                     .font(.system(size: 12))
             }
             .buttonStyle(.bordered)
-            .help("Install an APK file from your Mac")
+            .help(Text("app_browser_help_install_apk"))
 
             if !selectedPackages.isEmpty {
                 let hasBusySelected = selectedPackages.contains { appManager.isPackageBusy($0) }
@@ -144,7 +151,7 @@ struct AppBrowserView: View {
                         sortOption = opt
                     } label: {
                         HStack {
-                            Text(opt.rawValue)
+                            Text(opt.localizedKey)
                             if sortOption == opt {
                                 Image(systemName: "checkmark")
                             }
@@ -154,7 +161,7 @@ struct AppBrowserView: View {
             } label: {
                 Image(systemName: "arrow.up.arrow.down")
             }
-            .help("Sort apps")
+            .help(Text("common_sort_apps"))
 
             // Refresh
             Button {
@@ -162,7 +169,7 @@ struct AppBrowserView: View {
             } label: {
                 Image(systemName: "arrow.clockwise")
             }
-            .help("Refresh app list")
+            .help(Text("app_browser_help_refresh_apps"))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -206,7 +213,7 @@ struct AppBrowserView: View {
                         .foregroundColor(.secondary)
                     Spacer()
                     if !selectedPackages.isEmpty {
-                        Text("\(selectedPackages.count) selected")
+                        Text(String.localized("common_selected_count_format", selectedPackages.count))
                             .font(.system(size: 11))
                             .foregroundColor(.blue)
                     }
@@ -224,10 +231,10 @@ struct AppBrowserView: View {
                         Image(systemName: "app.dashed")
                             .font(.system(size: 32))
                             .foregroundColor(.secondary)
-                        Text(searchQuery.isEmpty ? "No apps found." : "No results for \"\(searchQuery)\"")
+                        Text(searchQuery.isEmpty ? String.localized("app_browser_empty_message") : String.localized("file_browser_no_results_format", searchQuery))
                             .foregroundColor(.secondary)
                         if !searchQuery.isEmpty {
-                            Button("Clear Search") { searchQuery = "" }
+                            Button("common_clear_search") { searchQuery = "" }
                                 .buttonStyle(.bordered)
                                 .font(.system(size: 12))
                         }
@@ -356,23 +363,23 @@ struct AppBrowserView: View {
                     .foregroundColor(.orange)
                 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Enable 'Install via USB'")
+                    Text("app_browser_install_warning_title")
                         .font(.headline)
                     
-                    Text("To successfully install APKs, ensure USB Debugging and Install via USB (if available) are enabled in your device's Developer Options.")
+                    Text("app_browser_install_warning_step1")
                         .font(.body)
                         .foregroundColor(.secondary)
                         .lineLimit(nil)
                         .fixedSize(horizontal: false, vertical: true)
                     
-                    Text("Additionally, a confirmation popup will appear on your device screen. You must tap 'Install' or 'Accept' on the device to complete the installation.")
+                    Text("app_browser_install_warning_step2")
                         .font(.body)
                         .foregroundColor(.primary)
                         .fontWeight(.semibold)
                         .lineLimit(nil)
                         .fixedSize(horizontal: false, vertical: true)
                     
-                    Text("On brand-specific devices (such as Xiaomi, OnePlus, Realme, etc.), you must explicitly accept the security prompt that appears on your phone screen during the installation process.")
+                    Text("app_browser_install_warning_brand_note")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .lineLimit(nil)
@@ -384,18 +391,18 @@ struct AppBrowserView: View {
             Divider()
             
             HStack {
-                Toggle("Don't show this warning again", isOn: $dontShowWarningAgainLocal)
+                Toggle("app_browser_dont_show_again", isOn: $dontShowWarningAgainLocal)
                     .toggleStyle(.checkbox)
                     .font(.subheadline)
                 
                 Spacer()
                 
-                Button("Cancel") {
+                Button("common_cancel") {
                     showADBInstallWarning = false
                 }
                 .keyboardShortcut(.cancelAction)
                 
-                Button("Proceed") {
+                Button("common_proceed") {
                     showADBInstallWarning = false
                     AppManager.hasShownADBInstallWarningInSession = true
                     if dontShowWarningAgainLocal {

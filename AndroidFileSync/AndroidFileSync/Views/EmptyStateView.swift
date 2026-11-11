@@ -80,9 +80,9 @@ struct EmptyStateView: View {
             .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Connect your Android")
+                Text("empty_state_connect_android")
                     .font(.system(size: 30, weight: .semibold, design: .rounded))
-                Text("Your files, right here on your Mac. Choose how to connect.")
+                Text("empty_state_desc")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
             }
@@ -151,11 +151,11 @@ struct EmptyStateView: View {
             VStack(alignment: .trailing, spacing: 7) {
                 if let onRetry {
                     Button(action: onRetry) {
-                        Label(scanInProgress ? "Scanning…" : "Scan USB & Wi-Fi", systemImage: "arrow.clockwise")
+                        Label(scanInProgress ? "empty_state_btn_scanning" : "empty_state_btn_scan_usb_wifi", systemImage: "arrow.clockwise")
                     }
                     .buttonStyle(.bordered)
                     .disabled(scanInProgress || isClaimingUSB || isRefreshingRecognizedDevices)
-                    .help("Check USB connections and refresh wireless discovery")
+                    .help(Text("empty_state_help_scan_usb_wifi"))
                 }
                 if isDetecting && !needsAttention && !userDisconnected, let scanStartedAt {
                     TimelineView(.periodic(from: scanStartedAt, by: 1)) { context in
@@ -164,7 +164,7 @@ struct EmptyStateView: View {
                             .foregroundStyle(.secondary)
                     }
                 } else {
-                    Text("Checks both connection methods")
+                    Text("empty_state_checks_both")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 }
@@ -197,14 +197,14 @@ struct EmptyStateView: View {
 
             if isUSBOccupied, let onClaimUSB {
                 Button(action: onClaimUSB) {
-                    Label(isClaimingUSB ? "Claiming USB…" : "Claim USB", systemImage: "cable.connector")
+                    Label(isClaimingUSB ? "empty_state_btn_claiming_usb" : "empty_state_btn_claim_usb", systemImage: "cable.connector")
                         .frame(maxWidth: .infinity, minHeight: 22)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(isClaimingUSB || isCheckingDevices)
-                .help("Release USB from the other app and retry the connection")
+                .help(Text("empty_state_help_claim_usb"))
             }
-            Text("Connects automatically once access is allowed")
+            Text("empty_state_auto_connect_notice")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Spacer(minLength: 0)
@@ -241,15 +241,15 @@ struct EmptyStateView: View {
 
             if let onConnectWiFi {
                 Button { onConnectWiFi(.qrCode) } label: {
-                    Label("QR Code", systemImage: "qrcode")
+                    Label("wireless_tab_qr_code", systemImage: "qrcode")
                         .frame(maxWidth: .infinity, minHeight: 22)
                 }
                 .buttonStyle(.borderedProminent)
 
                 HStack {
-                    Button("Nearby devices") { onConnectWiFi(.autoDiscovery) }
+                    Button("wireless_tab_auto_discovery") { onConnectWiFi(.autoDiscovery) }
                     Spacer(minLength: 8)
-                    Button("Connect manually") { onConnectWiFi(.manual) }
+                    Button("wireless_btn_connect_manually") { onConnectWiFi(.manual) }
                 }
                 .font(.system(size: 11, weight: .medium))
                 .buttonStyle(.link)
@@ -273,7 +273,7 @@ struct EmptyStateView: View {
                     Text(lastRecognizedRefreshDate, style: .time)
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
-                        .help("Last completed availability check")
+                        .help(Text("wireless_last_completed_avail_check"))
                 }
                 if let onRefreshRecognizedDevices {
                     Button(action: onRefreshRecognizedDevices) {
@@ -284,14 +284,14 @@ struct EmptyStateView: View {
                             } else {
                                 Image(systemName: "arrow.clockwise")
                             }
-                            Text(isRefreshingRecognizedDevices ? "Checking…" : "Refresh")
+                            Text(isRefreshingRecognizedDevices ? "common_connecting" : "common_refresh")
                         }
                         .font(.system(size: 11, weight: .medium))
                     }
                     .buttonStyle(.borderless)
                     .disabled(isRefreshingRecognizedDevices || scanInProgress || !connectingWirelessSerials.isEmpty || recognizedWirelessDevices.isEmpty)
-                    .accessibilityLabel("Refresh previously recognized devices")
-                    .help("Check which recognized Wi-Fi devices are currently available")
+                    .accessibilityLabel(Text("wireless_btn_refresh_recognized"))
+                    .help(Text("wireless_check_recognized_available"))
                 }
             }
             if let recognizedRefreshError {
@@ -301,7 +301,7 @@ struct EmptyStateView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if recognizedWirelessDevices.isEmpty {
-                Text("Your phones will appear here after you pair them. Availability updates automatically.")
+                Text("wireless_phones_appear_here")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -315,7 +315,7 @@ struct EmptyStateView: View {
                 }
                 .frame(height: CGFloat(min(recognizedWirelessDevices.count, 2)) * 52 - 8)
                 if recognizedWirelessDevices.count > 2 {
-                    Text("\(recognizedWirelessDevices.count) recognized devices · Scroll to see all")
+                    Text(String.localized("wireless_devices_recognized_scroll_format", recognizedWirelessDevices.count))
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 }
@@ -353,14 +353,14 @@ struct EmptyStateView: View {
                         if isConnecting {
                             ProgressView().controlSize(.mini).accessibilityHidden(true)
                         }
-                        Text(isConnecting ? "Connecting…" : "Connect")
+                        Text(isConnecting ? "common_connecting" : "common_connect")
                     }
                     .font(.system(size: 11, weight: .medium))
                 }
                 .buttonStyle(.borderless)
                 .disabled(isConnecting)
                 .accessibilityLabel(isConnecting ? "Connecting to \(device.displayName)" : "Connect to \(device.displayName)")
-                .help("Connect to this phone using its current Wi-Fi address")
+                .help(Text("wireless_help_connect_phone_wifi"))
             }
             if let onRemoveRecognizedDevice {
                 Button { onRemoveRecognizedDevice(device.id) } label: {

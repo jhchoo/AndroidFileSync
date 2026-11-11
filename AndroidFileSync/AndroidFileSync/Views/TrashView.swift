@@ -41,17 +41,17 @@ struct TrashView: View {
         VStack(spacing: 0) {
             // Header
             HStack {
-                Label("Trash", systemImage: "trash")
+                Label("trash_title", systemImage: "trash")
                     .font(.headline)
                 
                 Spacer()
                 
-                Text("\(fileActionManager.trashedItems.count) items")
+                Text(String.localized("common_items_count_format", fileActionManager.trashedItems.count))
                     .foregroundColor(.secondary)
                     .font(.caption)
                 
                 if !fileActionManager.trashedItems.isEmpty {
-                    Button("Restore All") {
+                    Button("trash_btn_restore_all") {
                         Task {
                             try? await fileActionManager.restoreAllFromTrash()
                             onStorageChanged?()
@@ -59,7 +59,7 @@ struct TrashView: View {
                     }
                     .font(.caption)
 
-                    Button("Empty Trash") {
+                    Button("trash_btn_empty_trash") {
                         showEmptyTrashConfirmation = true
                     }
                     .foregroundColor(.red)
@@ -91,7 +91,7 @@ struct TrashView: View {
                     Image(systemName: "trash.slash")
                         .font(.system(size: 48))
                         .foregroundColor(.secondary)
-                    Text("Trash is empty")
+                    Text("trash_empty_message")
                         .foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -118,7 +118,7 @@ struct TrashView: View {
                                 onStorageChanged?()
                             }
                         } label: {
-                            Label("Restore", systemImage: "arrow.uturn.backward")
+                            Label("common_restore", systemImage: "arrow.uturn.backward")
                                 .font(.caption)
                         }
                         .buttonStyle(.borderless)
@@ -128,7 +128,7 @@ struct TrashView: View {
                             itemToDelete = item
                             showPermanentDeleteConfirmation = true
                         } label: {
-                            Label("Delete", systemImage: "xmark.circle.fill")
+                            Label("common_delete", systemImage: "xmark.circle.fill")
                                 .font(.caption)
                                 .foregroundColor(.red)
                         }
@@ -139,23 +139,23 @@ struct TrashView: View {
             }
         }
         // Empty Trash confirmation
-        .alert("Empty Trash?", isPresented: $showEmptyTrashConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Empty Trash", role: .destructive) {
+        .alert(String.localized("trash_alert_empty_title"), isPresented: $showEmptyTrashConfirmation) {
+            Button("common_cancel", role: .cancel) { }
+            Button("trash_btn_empty_trash", role: .destructive) {
                 Task {
                     try? await fileActionManager.emptyTrash()
                     onStorageChanged?()
                 }
             }
         } message: {
-            Text("All \(fileActionManager.trashedItems.count) items will be permanently deleted. This cannot be undone.")
+            Text(String.localized("trash_alert_empty_message_format", fileActionManager.trashedItems.count))
         }
         // Permanent delete confirmation
-        .alert("Delete Permanently?", isPresented: $showPermanentDeleteConfirmation) {
-            Button("Cancel", role: .cancel) {
+        .alert(String.localized("trash_alert_delete_title"), isPresented: $showPermanentDeleteConfirmation) {
+            Button("common_cancel", role: .cancel) {
                 itemToDelete = nil
             }
-            Button("Delete Permanently", role: .destructive) {
+            Button("common_delete_permanently", role: .destructive) {
                 if let item = itemToDelete {
                     Task {
                         try? await fileActionManager.permanentlyDeleteFromTrash(item)
@@ -165,7 +165,7 @@ struct TrashView: View {
                 itemToDelete = nil
             }
         } message: {
-            Text("\"\(itemToDelete?.name ?? "This item")\" will be permanently deleted. This cannot be undone.")
+            Text(String.localized("trash_alert_delete_message_format", itemToDelete?.name ?? "This item"))
         }
     }
 }
@@ -181,13 +181,13 @@ struct UndoDeleteBar: View {
             Image(systemName: "trash.fill")
                 .foregroundColor(.white)
             
-            Text("\"\(deletedItemName)\" moved to Trash")
+            Text(String.localized("trash_undo_moved_to_trash_format", deletedItemName))
                 .foregroundColor(.white)
                 .lineLimit(1)
             
             Spacer()
             
-            Button("Undo") {
+            Button("common_undo") {
                 onUndo()
             }
             .buttonStyle(.bordered)

@@ -30,6 +30,15 @@ struct ActionToolbar: View {
         case size = "Size"
         case type = "Type"
         case date = "Date"
+
+        var localizedKey: LocalizedStringKey {
+            switch self {
+            case .name: return "common_sort_name"
+            case .size: return "common_sort_size"
+            case .type: return "common_sort_type"
+            case .date: return "common_sort_date"
+            }
+        }
     }
     
     var isSearchActive: Bool {
@@ -41,11 +50,11 @@ struct ActionToolbar: View {
             // New Folder button
             Button {
                 if let name = TextInputDialog.show(
-                    title: "New Folder",
-                    message: "Enter a name for the new folder",
-                    placeholder: "Folder name",
-                    initialValue: "New Folder",
-                    confirmLabel: "Create"
+                    title: String.localized("file_browser_dialog_new_folder_title"),
+                    message: String.localized("file_browser_dialog_new_folder_message"),
+                    placeholder: String.localized("file_browser_dialog_new_folder_placeholder"),
+                    initialValue: String.localized("file_browser_dialog_new_folder_default_name"),
+                    confirmLabel: String.localized("common_create")
                 ) {
                     Task {
                         do {
@@ -57,21 +66,21 @@ struct ActionToolbar: View {
                     }
                 }
             } label: {
-                Label("New Folder", systemImage: "folder.badge.plus")
+                Label("file_browser_btn_new_folder", systemImage: "folder.badge.plus")
                     .font(.caption)
             }
             .buttonStyle(.borderless)
-            .help("Create new folder (⌘⇧N)")
+            .help(Text("file_browser_help_new_folder"))
             .keyboardShortcut("n", modifiers: [.command, .shift])
             
             // New File button
             Button {
                 if let name = TextInputDialog.show(
-                    title: "New File",
-                    message: "Enter a name for the new file",
-                    placeholder: "File name",
+                    title: String.localized("file_browser_dialog_new_file_title"),
+                    message: String.localized("file_browser_dialog_new_file_message"),
+                    placeholder: String.localized("file_browser_dialog_new_file_placeholder"),
                     initialValue: "untitled.txt",
-                    confirmLabel: "Create"
+                    confirmLabel: String.localized("common_create")
                 ) {
                     Task {
                         do {
@@ -83,11 +92,11 @@ struct ActionToolbar: View {
                     }
                 }
             } label: {
-                Label("New File", systemImage: "doc.badge.plus")
+                Label("file_browser_btn_new_file", systemImage: "doc.badge.plus")
                     .font(.caption)
             }
             .buttonStyle(.borderless)
-            .help("Create new file")
+            .help(Text("file_browser_help_new_file"))
             
             Divider()
                 .frame(height: 16)
@@ -142,7 +151,7 @@ struct ActionToolbar: View {
                         HStack(spacing: 2) {
                             Image(systemName: "doc.on.doc")
                                 .font(.system(size: 10))
-                            Text("Paste")
+                            Text("common_paste")
                                 .font(.system(size: 11, weight: .medium))
                         }
                     }
@@ -157,7 +166,7 @@ struct ActionToolbar: View {
                             .foregroundColor(.secondary.opacity(0.7))
                     }
                     .buttonStyle(.plain)
-                    .help("Clear clipboard")
+                    .help(Text("common_help_clear_clipboard"))
                 }
                 .fixedSize()
                 .padding(.horizontal, 8)
@@ -176,7 +185,7 @@ struct ActionToolbar: View {
                     .font(.system(size: 12))
                     .foregroundColor(isSearchActive ? .accentColor : .secondary)
                 
-                TextField("Search files...", text: $searchQuery)
+                TextField("common_search_files_placeholder", text: $searchQuery)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
                     .frame(minWidth: 120, maxWidth: 200)
@@ -203,7 +212,7 @@ struct ActionToolbar: View {
                                 .foregroundColor(.secondary)
                         }
                         .buttonStyle(.plain)
-                        .help("Clear search (Esc)")
+                        .help(Text("common_help_clear_search"))
                     }
                 }
             }
@@ -229,7 +238,7 @@ struct ActionToolbar: View {
                         onSortChanged?(option)
                     } label: {
                         HStack {
-                            Text(option.rawValue)
+                            Text(option.localizedKey)
                             if selectedSort == option {
                                 Image(systemName: "checkmark")
                             }
@@ -239,13 +248,13 @@ struct ActionToolbar: View {
             } label: {
                 HStack(spacing: 2) {
                     Image(systemName: "arrow.up.arrow.down")
-                    Text(selectedSort.rawValue)
+                    Text(selectedSort.localizedKey)
                         .font(.caption)
                 }
             }
             .menuStyle(.borderlessButton)
             .frame(width: 70)
-            .help("Sort by")
+            .help(Text("common_help_sort_by"))
             
             // Refresh button
             Button {
@@ -254,7 +263,7 @@ struct ActionToolbar: View {
                 Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(.borderless)
-            .help("Refresh (⌘R)")
+            .help(Text("common_help_refresh"))
             .keyboardShortcut("r", modifiers: .command)
         }
         .padding(.horizontal, 12)

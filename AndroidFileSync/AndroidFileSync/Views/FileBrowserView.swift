@@ -181,14 +181,14 @@ struct FileBrowserView: View {
             Button("Cancel", role: .cancel) {
                 fileToDelete = nil
             }
-            Button("Move to Trash", role: .destructive) {
+            Button(String.localized("file_browser_menu_move_to_trash"), role: .destructive) {
                 if let file = fileToDelete {
                     onDelete?(file)
                 }
                 fileToDelete = nil
             }
         } message: {
-            Text("You can restore this item from the Trash.")
+            Text("file_browser_alert_restore_single_message")
         }
         // Change extension alert (no pre-fill needed, so SwiftUI alert works fine here)
         .alert("Change Extension", isPresented: $showExtensionDialog) {
@@ -197,14 +197,14 @@ struct FileBrowserView: View {
             Button("Cancel", role: .cancel) {
                 newExtension = ""
             }
-            Button("Change") {
+            Button(String.localized("file_browser_btn_change_ext")) {
                 if !newExtension.isEmpty {
                     onBatchChangeExtension?(newExtension)
                 }
                 newExtension = ""
             }
         } message: {
-            Text("Enter new extension (e.g. txt, jpg) for \(selectedFiles.count) files.")
+            Text(String.localized("file_browser_dialog_enter_new_extension_format", selectedFiles.count))
         }
         // Batch delete confirmation alert
         .alert("Move \(batchDeleteCount) items to Trash?", isPresented: $showBatchDeleteConfirmation) {
@@ -216,19 +216,17 @@ struct FileBrowserView: View {
                 batchDeleteCount = 0
             }
         } message: {
-            Text("You can restore these items from the Trash.")
+            Text("file_browser_alert_restore_multiple_message")
         }
         // Permanent delete confirmation alert
         .alert(
-            filesToPermanentlyDelete.count <= 1
-                ? "Permanently delete \(filesToPermanentlyDelete.first?.name ?? "item")?"
-                : "Permanently delete \(filesToPermanentlyDelete.count) items?",
+            filesToPermanentlyDelete.count <= 1 ? String.localized("file_browser_alert_delete_item_permanently_format", filesToPermanentlyDelete.first?.name ?? "item") : String.localized("file_browser_alert_delete_items_permanently_format", filesToPermanentlyDelete.count),
             isPresented: $showPermanentDeleteConfirmation
         ) {
             Button("Cancel", role: .cancel) {
                 filesToPermanentlyDelete = []
             }
-            Button("Delete Permanently", role: .destructive) {
+            Button(String.localized("common_delete_permanently"), role: .destructive) {
                 let targets = filesToPermanentlyDelete
                 filesToPermanentlyDelete = []
                 if let onPermanentDeleteFiles {
@@ -238,7 +236,7 @@ struct FileBrowserView: View {
                 }
             }
         } message: {
-            Text("This cannot be undone. The item\(filesToPermanentlyDelete.count == 1 ? " will" : "s will") be permanently removed from the device.")
+            Text(filesToPermanentlyDelete.count <= 1 ? "file_browser_alert_permanent_single_message" : "file_browser_alert_permanent_multiple_message")
         }
     }
     
@@ -256,7 +254,7 @@ struct FileBrowserView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Go to parent folder")
+                .help(Text("file_browser_help_parent_folder"))
                 .padding(.trailing, 2)
             }
             
@@ -280,7 +278,7 @@ struct FileBrowserView: View {
                         .font(.system(size: 13))
                         .foregroundColor(.secondary)
                 }
-                .help("Loading more files from MediaStore...")
+                .help(Text("file_browser_help_loading_more_mediastore"))
             } else if isLoadingMetadata {
                 HStack(spacing: 4) {
                     LoadingSpinner()
@@ -288,9 +286,9 @@ struct FileBrowserView: View {
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(.secondary)
                 }
-                .help("Loading file details...")
+                .help(Text("file_browser_help_loading_details"))
             } else {
-                Text(files.count == 1 ? "1 item" : "\(files.count) items")
+                Text(String.localized("common_items_count_format", files.count))
                     .font(.system(size: 13))
                     .foregroundColor(.secondary)
                     .fixedSize()
@@ -315,20 +313,20 @@ struct FileBrowserView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(isDualPane ? "Single pane view" : "Dual pane (2-split) view")
+                .help(isDualPane ? Text("file_browser_help_single_pane") : Text("file_browser_help_dual_pane"))
             }
 
             Divider().frame(height: 16).padding(.horizontal, 4)
 
             // Upload button — accent-tinted, non-intrusive Apple style
             Button(action: showUploadDialog) {
-                Label("Upload to Android", systemImage: "arrow.up.circle")
+                Label("file_browser_btn_upload_to_android", systemImage: "arrow.up.circle")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
             .tint(.accentColor)
             .fixedSize()
-            .help("Upload files to this folder")
+            .help(Text("file_browser_help_upload_to_folder"))
         }
         .padding(.horizontal, 12)
         .frame(height: 38)
@@ -609,13 +607,13 @@ struct FileBrowserView: View {
     
     private var deletionDetailsPopover: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Deletion Progress")
+            Text("file_browser_deletion_progress")
                 .font(.system(size: 13, weight: .bold))
                 .padding(.bottom, 4)
             
             let deletions = activeDeletions.filter { !$0.isComplete }
             if deletions.isEmpty {
-                Text("No active deletions")
+                Text("file_browser_no_active_deletions")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             } else {
@@ -638,7 +636,7 @@ struct FileBrowserView: View {
                                 if deletion.isRunning {
                                     LoadingSpinner(size: 10)
                                 } else {
-                                    Text("Pending")
+                                    Text("common_pending")
                                         .font(.system(size: 9))
                                         .foregroundColor(.secondary)
                                 }
@@ -663,7 +661,7 @@ struct FileBrowserView: View {
                     onCancelAllDeletions?()
                     showDeletionPopover = false
                 } label: {
-                    Text("Cancel All Deletions")
+                    Text("file_browser_btn_cancel_all_deletions")
                         .font(.system(size: 11, weight: .semibold))
                         .frame(maxWidth: .infinity)
                 }
@@ -730,14 +728,14 @@ struct FileBrowserView: View {
             Button {
                 selectedFiles = Set(files.map(\.id))
             } label: {
-                Label("Select All", systemImage: "checkmark.circle")
+                Label("common_select_all", systemImage: "checkmark.circle")
             }
             .disabled(files.isEmpty || allFilesSelected)
 
             Button {
                 selectedFiles.removeAll()
             } label: {
-                Label("Deselect All", systemImage: "xmark.circle")
+                Label("common_deselect_all", systemImage: "xmark.circle")
             }
             .disabled(selectedFiles.isEmpty)
         } label: {
@@ -748,8 +746,8 @@ struct FileBrowserView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Selection options")
-        .accessibilityLabel("Selection options")
+        .help(Text("common_selection_options"))
+        .accessibilityLabel(Text("common_selection_options"))
     }
 
     private var viewModeToggle: some View {
@@ -887,13 +885,12 @@ struct FileBrowserView: View {
         guard let onRename = onRename else { return }
         let selected = files.filter { selectedFiles.contains($0.id) }
         guard selected.count == 1, let file = selected.first else { return }
-        let kind = file.isDirectory ? "Folder" : "File"
         if let newName = TextInputDialog.show(
-            title: "Rename \(kind)",
-            message: "Enter a new name for \"\(file.name)\"",
+            title: String.localized(file.isDirectory ? "file_browser_dialog_rename_folder_title" : "file_browser_dialog_rename_file_title"),
+            message: String.localized("file_browser_dialog_rename_message_format", file.name),
             placeholder: file.name,
             initialValue: file.name,
-            confirmLabel: "Rename"
+            confirmLabel: String.localized("common_rename")
         ), newName != file.name {
             onRename(file, newName)
         }
@@ -984,11 +981,11 @@ struct FileBrowserView: View {
                 .font(.system(size: 48))
                 .foregroundColor(isDraggingOver ? .blue : .secondary)
             
-            Text(isDraggingOver ? "Drop files to upload" : "Folder is empty")
+            Text(isDraggingOver ? "file_browser_empty_drop_to_upload" : "file_browser_empty_folder")
                 .foregroundColor(isDraggingOver ? .blue : .secondary)
             
             if !isDraggingOver {
-                Text("Drag files here or click the Upload button")
+                Text("file_browser_empty_drag_hint")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -1163,14 +1160,14 @@ struct FileBrowserView: View {
                                 Button {
                                     onPreview?(firstItem)
                                 } label: {
-                                    Label("Preview", systemImage: "eye")
+                                    Label("file_preview_action_preview", systemImage: "eye")
                                 }
                                 Divider()
                             }
                             
                             // Download
                             if !firstItem.isDirectory || !isSingleSelection {
-                                Button(isSingleSelection ? "Download to Mac" : "Download Selected to Mac") {
+                                Button(isSingleSelection ? String.localized("file_browser_btn_download_to_mac") : String.localized("file_browser_btn_download_selected")) {
                                     if isSingleSelection, let file = selectedItems.first, !file.isDirectory {
                                         onDownload(file)
                                     } else {
@@ -1185,27 +1182,27 @@ struct FileBrowserView: View {
                                 Button {
                                     onDownloadFolder?(firstItem)
                                 } label: {
-                                    Label("Download Folder to Mac", systemImage: "folder.badge.gearshape")
+                                    Label("file_browser_btn_download_folder", systemImage: "folder.badge.gearshape")
                                 }
 
                                 // ── Add to Sidebar ──────────────────────────────
                                 Button {
                                     onAddToSidebar?(firstItem)
                                 } label: {
-                                    Label("Add to Sidebar", systemImage: "sidebar.left")
+                                    Label("file_browser_btn_add_to_sidebar", systemImage: "sidebar.left")
                                 }
 
                                 Divider()
                             }
                             
                             // Copy
-                            Button(isSingleSelection ? "Copy" : "Copy \(selectedIds.count) items") {
+                            Button(isSingleSelection ? String.localized("common_copy") : String.localized("file_browser_menu_copy_count_format", selectedIds.count)) {
                                 let items = isSingleSelection ? [firstItem] : selectedItems
                                 onCopy?(items)
                             }
                             
                             // Cut
-                            Button(isSingleSelection ? "Cut" : "Cut \(selectedIds.count) items") {
+                            Button(isSingleSelection ? String.localized("common_cut") : String.localized("file_browser_menu_cut_count_format", selectedIds.count)) {
                                 let items = isSingleSelection ? [firstItem] : selectedItems
                                 onCut?(items)
                             }
@@ -1236,14 +1233,13 @@ struct FileBrowserView: View {
                         
                         // Rename - only for single selection
                         if isSingleSelection {
-                            Button("Rename") {
-                                let kind = firstItem.isDirectory ? "Folder" : "File"
+                            Button("common_rename") {
                                 if let newName = TextInputDialog.show(
-                                    title: "Rename \(kind)",
-                                    message: "Enter a new name for \"\(firstItem.name)\"",
+                                    title: String.localized(firstItem.isDirectory ? "file_browser_dialog_rename_folder_title" : "file_browser_dialog_rename_file_title"),
+                                    message: String.localized("file_browser_dialog_rename_message_format", firstItem.name),
                                     placeholder: firstItem.name,
                                     initialValue: firstItem.name,
-                                    confirmLabel: "Rename"
+                                    confirmLabel: String.localized("common_rename")
                                 ), newName != firstItem.name {
                                     onRename?(firstItem, newName)
                                 }
@@ -1253,14 +1249,14 @@ struct FileBrowserView: View {
                         
                         // Change Extension - only for multiple files (no folders)
                         if selectedIds.count > 1 && hasOnlyFiles {
-                            Button("Change Extension...") {
+                            Button(String.localized("file_browser_btn_change_ext")) {
                                 showExtensionDialog = true
                             }
                             .disabled(onBatchChangeExtension == nil)
                         }
                         
                         // Move to Trash
-                        Button(isSingleSelection ? "Move to Trash" : "Move \(selectedIds.count) items to Trash", role: .destructive) {
+                        Button(isSingleSelection ? String.localized("file_browser_menu_move_to_trash") : String.localized("file_browser_alert_move_items_to_trash_format", selectedIds.count), role: .destructive) {
                             if isSingleSelection {
                                 fileToDelete = firstItem
                                 showDeleteConfirmation = true
@@ -1271,7 +1267,7 @@ struct FileBrowserView: View {
                         }
 
                         // 완전 삭제
-                        Button(isSingleSelection ? "완전 삭제" : "\(selectedIds.count)개 항목 완전 삭제", role: .destructive) {
+                        Button(isSingleSelection ? String.localized("file_browser_menu_delete_permanently") : String.localized("file_browser_alert_delete_items_permanently_format", selectedIds.count), role: .destructive) {
                             filesToPermanentlyDelete = selectedItems
                             showPermanentDeleteConfirmation = true
                         }
@@ -1305,14 +1301,14 @@ struct FileBrowserView: View {
             Button {
                 onPreview?(file)
             } label: {
-                Label("Preview", systemImage: "eye")
+                Label("file_preview_action_preview", systemImage: "eye")
             }
             Divider()
         }
         
         // Batch download remains available for a mixed selection.
         if !file.isDirectory || !isSingleSelection {
-            Button(isSingleSelection ? "Download to Mac" : "Download Selected to Mac") {
+            Button(isSingleSelection ? String.localized("file_browser_btn_download_to_mac") : String.localized("file_browser_btn_download_selected")) {
                 if isSingleSelection {
                     onDownload(file)
                 } else {
@@ -1327,25 +1323,25 @@ struct FileBrowserView: View {
             Button {
                 onDownloadFolder?(file)
             } label: {
-                Label("Download Folder to Mac", systemImage: "folder.badge.gearshape")
+                Label("file_browser_btn_download_folder", systemImage: "folder.badge.gearshape")
             }
 
             Button {
                 onAddToSidebar?(file)
             } label: {
-                Label("Add to Sidebar", systemImage: "sidebar.left")
+                Label("file_browser_btn_add_to_sidebar", systemImage: "sidebar.left")
             }
             Divider()
         }
         
         // Copy
-        Button(isSingleSelection ? "Copy" : "Copy \(targetIDs.count) items") {
+        Button(isSingleSelection ? String.localized("common_copy") : String.localized("file_browser_menu_copy_count_format", targetIDs.count)) {
             let items = isSingleSelection ? [file] : selectedItems
             onCopy?(items)
         }
         
         // Cut
-        Button(isSingleSelection ? "Cut" : "Cut \(targetIDs.count) items") {
+        Button(isSingleSelection ? String.localized("common_cut") : String.localized("file_browser_menu_cut_count_format", targetIDs.count)) {
             let items = isSingleSelection ? [file] : selectedItems
             onCut?(items)
         }
@@ -1379,14 +1375,13 @@ struct FileBrowserView: View {
         
         // Rename - only for single selection
         if isSingleSelection {
-            Button("Rename") {
-                let kind = file.isDirectory ? "Folder" : "File"
+            Button("common_rename") {
                 if let newName = TextInputDialog.show(
-                    title: "Rename \(kind)",
-                    message: "Enter a new name for \"\(file.name)\"",
+                    title: String.localized(file.isDirectory ? "file_browser_dialog_rename_folder_title" : "file_browser_dialog_rename_file_title"),
+                    message: String.localized("file_browser_dialog_rename_message_format", file.name),
                     placeholder: file.name,
                     initialValue: file.name,
-                    confirmLabel: "Rename"
+                    confirmLabel: String.localized("common_rename")
                 ), newName != file.name {
                     onRename?(file, newName)
                 }
@@ -1396,14 +1391,14 @@ struct FileBrowserView: View {
         
         // Change Extension - only for multiple files (no folders)
         if targetIDs.count > 1 && hasOnlyFiles {
-            Button("Change Extension...") {
+            Button(String.localized("file_browser_btn_change_ext")) {
                 showExtensionDialog = true
             }
             .disabled(onBatchChangeExtension == nil)
         }
         
         // Move to Trash - always available
-        Button(isSingleSelection ? "Move to Trash" : "Move \(targetIDs.count) items to Trash", role: .destructive) {
+        Button(isSingleSelection ? String.localized("file_browser_menu_move_to_trash") : String.localized("file_browser_alert_move_items_to_trash_format", targetIDs.count), role: .destructive) {
             if isSingleSelection {
                 fileToDelete = file
                 showDeleteConfirmation = true
@@ -1415,7 +1410,7 @@ struct FileBrowserView: View {
         .disabled(onDelete == nil)
 
         // 완전 삭제
-        Button(isSingleSelection ? "완전 삭제" : "\(targetIDs.count)개 항목 완전 삭제", role: .destructive) {
+        Button(isSingleSelection ? String.localized("file_browser_menu_delete_permanently") : String.localized("file_browser_alert_delete_items_permanently_format", targetIDs.count), role: .destructive) {
             filesToPermanentlyDelete = isSingleSelection ? [file] : selectedItems
             showPermanentDeleteConfirmation = true
         }
@@ -1430,7 +1425,7 @@ struct FileBrowserView: View {
             Button {
                 onNewFolder?()
             } label: {
-                Label("New Folder", systemImage: "folder.badge.plus")
+                Label("file_browser_btn_new_folder", systemImage: "folder.badge.plus")
             }
             
             Divider()
@@ -1449,9 +1444,9 @@ struct FileBrowserView: View {
 
     private var pasteMenuTitle: String {
         if clipboardCount > 1 {
-            return "Paste Here (\(clipboardCount) items)"
+            return String.localized("file_browser_menu_paste_here_count_format", clipboardCount)
         } else {
-            return "Paste Here"
+            return String.localized("file_browser_menu_paste_here")
         }
     }
     

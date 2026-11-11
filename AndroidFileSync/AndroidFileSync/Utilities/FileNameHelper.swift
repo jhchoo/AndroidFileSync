@@ -101,3 +101,19 @@ struct FileNameHelper {
         return cleaned.hasPrefix("/") ? cleaned : "/" + cleaned
     }
 }
+
+// MARK: - Android-style Localization Helpers
+
+extension String {
+    /// Returns the localized string for the specified key from the main bundle string catalog.
+    static func localized(_ key: String) -> String {
+        NSLocalizedString(key, comment: "")
+    }
+
+    /// Returns a formatted localized string for the specified key and arguments.
+    static func localized(_ key: String, _ arguments: CVarArg...) -> String {
+        let format = NSLocalizedString(key, comment: "")
+        return String(format: format, arguments: arguments)
+    }
+}
+

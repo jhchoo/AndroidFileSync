@@ -516,7 +516,7 @@ struct SidebarView: View {
                     }
                 } header: {
                     HStack {
-                        Text("Quick Access")
+                        Text("sidebar_group_quick_access")
                             .font(.system(size: 11, weight: .bold))
                             .foregroundColor(isQuickAccessHeaderTargeted ? Color.accentColor : .secondary)
                             .padding(.vertical, 2)
@@ -535,7 +535,7 @@ struct SidebarView: View {
                                 )
                         }
                         .buttonStyle(.plain)
-                        .help("Add New Group")
+                        .help(Text("sidebar_btn_add_new_group"))
                         .onHover { isAddGroupHovered = $0 }
                     }
                     .padding(.vertical, 1)
@@ -545,7 +545,7 @@ struct SidebarView: View {
                     )
                     .contentShape(Rectangle())
                     .contextMenu {
-                        Button("Add Group...", action: createNewGroup)
+                        Button("sidebar_btn_add_group", action: createNewGroup)
                     }
                     .onDrop(
                         of: [
@@ -765,10 +765,10 @@ struct SidebarView: View {
 
     private func createNewGroup() {
         if let name = TextInputDialog.show(
-            title: "New Group",
-            message: "Enter a name for the new sidebar group:",
-            placeholder: "Group Name",
-            confirmLabel: "Create"
+            title: String.localized("sidebar_dialog_new_group_title"),
+            message: String.localized("sidebar_dialog_new_group_message"),
+            placeholder: String.localized("sidebar_dialog_new_group_placeholder"),
+            confirmLabel: String.localized("common_create")
         ) {
             _ = sidebarManager.addGroup(name: name)
         }
@@ -776,11 +776,11 @@ struct SidebarView: View {
 
     private func renameGroup(_ group: SidebarGroup) {
         if let newName = TextInputDialog.show(
-            title: "Rename Group",
-            message: "Enter a new name for '\(group.name)':",
-            placeholder: "Group Name",
+            title: String.localized("sidebar_dialog_rename_group_title"),
+            message: String.localized("sidebar_dialog_rename_group_message_format", group.name),
+            placeholder: String.localized("sidebar_dialog_new_group_placeholder"),
             initialValue: group.name,
-            confirmLabel: "Rename"
+            confirmLabel: String.localized("common_save")
         ) {
             sidebarManager.renameGroup(id: group.id, newName: newName)
         }
@@ -1247,7 +1247,7 @@ struct GroupHeaderView: View {
 
     var body: some View {
         HStack {
-            Text(group.name)
+            (group.isDefault ? Text("sidebar_group_favorites") : Text(group.name))
                 .font(.system(size: 11, weight: .bold))
                 .foregroundColor(isDropTargeted ? Color.accentColor : .secondary)
                 .padding(.vertical, 2)
@@ -1268,7 +1268,7 @@ struct GroupHeaderView: View {
                             )
                     }
                     .buttonStyle(.plain)
-                    .help("Restore hidden default folders")
+                    .help(Text("sidebar_help_restore_hidden"))
                     .onHover { isRestoreHovered = $0 }
                 }
             } else {
@@ -1285,7 +1285,7 @@ struct GroupHeaderView: View {
                             )
                     }
                     .buttonStyle(.plain)
-                    .help("Rename Group")
+                    .help(Text("sidebar_menu_rename_group_plain"))
                     .onHover { isRenameHovered = $0 }
 
                     // Group Delete Button
@@ -1300,7 +1300,7 @@ struct GroupHeaderView: View {
                             )
                     }
                     .buttonStyle(.plain)
-                    .help("Delete Group")
+                    .help(Text("sidebar_menu_delete_group"))
                     .onHover { isDeleteHovered = $0 }
                 }
             }
@@ -1314,12 +1314,12 @@ struct GroupHeaderView: View {
         .contextMenu {
             if group.isDefault {
                 if hasHiddenBuiltIns {
-                    Button("Restore Hidden Default Folders", action: onRestoreBuiltIns)
+                    Button("sidebar_btn_restore_hidden", action: onRestoreBuiltIns)
                 }
             } else {
-                Button("Rename Group...", action: onRenameGroup)
+                Button("sidebar_menu_rename_group", action: onRenameGroup)
                 Divider()
-                Button("Delete Group", role: .destructive, action: onDeleteGroup)
+                Button("sidebar_menu_delete_group", role: .destructive, action: onDeleteGroup)
             }
         }
         .onDrop(
@@ -1354,7 +1354,7 @@ struct QuickAccessRow: View {
                 Image(systemName: item.icon)
                     .foregroundColor(Color(item.color.color))
 
-                Text(item.name)
+                Text(itemDisplayName)
                     .lineLimit(1)
 
                 Spacer()
@@ -1392,7 +1392,7 @@ struct QuickAccessRow: View {
         .contentShape(Rectangle())
         .contextMenu {
             if !item.isBuiltIn && !availableGroups.isEmpty {
-                Menu("Move to Group") {
+                Menu("sidebar_menu_move_to_group") {
                     ForEach(availableGroups) { grp in
                         Button(grp.name) {
                             onMoveToGroup?(grp.id)
@@ -1407,15 +1407,30 @@ struct QuickAccessRow: View {
                 Button(role: .destructive) {
                     onRemove?()
                 } label: {
-                    Label("Hide from Sidebar", systemImage: "eye.slash")
+                    Label("sidebar_menu_hide_from_sidebar", systemImage: "eye.slash")
                 }
             } else {
                 Button(role: .destructive) {
                     onRemove?()
                 } label: {
-                    Label("Remove from Sidebar", systemImage: "minus.circle")
+                    Label("sidebar_menu_remove_from_sidebar", systemImage: "minus.circle")
                 }
             }
+        }
+    }
+
+    private var itemDisplayName: LocalizedStringKey {
+        switch item.name {
+        case "Internal Storage": return "sidebar_item_internal_storage"
+        case "Camera": return "sidebar_item_camera"
+        case "Downloads": return "sidebar_item_downloads"
+        case "Pictures": return "sidebar_item_pictures"
+        case "Music": return "sidebar_item_music"
+        case "Movies": return "sidebar_item_movies"
+        case "Documents": return "sidebar_item_documents"
+        case "Apps": return "sidebar_item_apps"
+        case "Trash": return "trash_title"
+        default: return LocalizedStringKey(item.name)
         }
     }
 

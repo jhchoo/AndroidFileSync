@@ -31,6 +31,8 @@
 				AndroidFileSyncApp.swift,
 				Assets.xcassets,
 				ContentView.swift,
+				InfoPlist.xcstrings,
+				Localizable.xcstrings,
 				Managers/ADBManager.swift,
 				Managers/ADBPairingResponse.swift,
 				Managers/AndroidStorageAccess.swift,
@@ -188,6 +190,7 @@
 			knownRegions = (
 				en,
 				Base,
+				ko,
 			);
 			mainGroup = 453BAF002EC66BC4008AABAB;
 			minimizedProjectReferenceProxies = 1;

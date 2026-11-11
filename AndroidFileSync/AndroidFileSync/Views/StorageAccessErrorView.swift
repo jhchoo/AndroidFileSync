@@ -14,14 +14,14 @@ struct StorageAccessErrorView: View {
             Image(systemName: "folder.badge.questionmark")
                 .font(.system(size: 44, weight: .light))
                 .foregroundStyle(.secondary)
-            Text(canRepair ? "File access is blocked" : "Couldn't open this folder")
+            Text(canRepair ? "storage_access_blocked" : "storage_access_couldnt_open")
                 .font(.title2.weight(.semibold))
             Text(message)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 440)
             if canRepair {
-                Text("Fix storage access allows shared file access through Android debugging, including other debugging apps you use.")
+                Text("storage_access_notice")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -32,16 +32,16 @@ struct StorageAccessErrorView: View {
                     Button(action: onRepair) {
                         HStack {
                             if isRepairing { ProgressView().controlSize(.small) }
-                            Text(isRepairing ? "Fixing file access…" : "Fix storage access")
+                            Text(isRepairing ? "storage_access_fixing" : "storage_access_fix_btn")
                         }
                     }
                     .buttonStyle(.borderedProminent)
                 }
-                Button(isLoading ? "Checking files…" : "Try again", action: onRetry)
+                Button(isLoading ? "common_checking_files" : "common_try_again", action: onRetry)
                     .buttonStyle(.bordered)
             }
             .disabled(isRepairing || isLoading)
-            Button("Save diagnostics…", action: onSaveDiagnostics)
+            Button("storage_access_save_diagnostics", action: onSaveDiagnostics)
                 .buttonStyle(.link)
                 .disabled(isRepairing || isLoading)
         }

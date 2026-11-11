@@ -13,6 +13,15 @@ enum AppFilter: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var localizedKey: String {
+        switch self {
+        case .all:      return "common_apps"
+        case .user:     return "app_browser_filter_user"
+        case .system:   return "app_browser_filter_system"
+        case .disabled: return "app_browser_filter_disabled"
+        }
+    }
+
     var icon: String {
         switch self {
         case .all:      return "square.grid.2x2.fill"

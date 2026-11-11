@@ -18,7 +18,7 @@ struct ReportIssuePopoverView: View {
                 Image(systemName: "exclamationmark.bubble.fill")
                     .font(.title3)
                     .foregroundColor(.orange)
-                Text("Report an Issue")
+                Text("report_issue_title")
                     .font(.headline)
             }
 
@@ -30,9 +30,9 @@ struct ReportIssuePopoverView: View {
                 set: { diagnosticsControl.isEnabled = $0 }
             )) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Enable Logging")
+                    Text("report_issue_enable_logging")
                         .font(.subheadline.weight(.medium))
-                    Text("Collect diagnostic logs to help troubleshoot issues. No private data is collected.")
+                    Text("report_issue_logging_desc")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -47,7 +47,7 @@ struct ReportIssuePopoverView: View {
                         NSWorkspace.shared.selectFile(url.path, inFileViewerRootedAtPath: "")
                     }
                 } label: {
-                    Label("View Logs in Finder", systemImage: "doc.text.magnifyingglass")
+                    Label("report_issue_view_logs_finder", systemImage: "doc.text.magnifyingglass")
                         .font(.subheadline)
                 }
                 .buttonStyle(.plain)
@@ -62,7 +62,7 @@ struct ReportIssuePopoverView: View {
             } label: {
                 HStack {
                     Spacer()
-                    Label("Report Issue on GitHub", systemImage: "arrow.up.right.square")
+                    Label("report_issue_on_github", systemImage: "arrow.up.right.square")
                         .font(.subheadline.weight(.medium))
                     Spacer()
                 }

@@ -48,7 +48,7 @@ struct SelectionToolbar: View {
             
             HStack(spacing: 12) {
                 // Selection count
-                Label("\(selectedCount) selected", systemImage: "checkmark.circle.fill")
+                Label(String.localized("common_selected_count_format", selectedCount), systemImage: "checkmark.circle.fill")
                     .font(.subheadline)
                     .foregroundColor(.blue)
                 
@@ -58,7 +58,7 @@ struct SelectionToolbar: View {
                 Button {
                     onClearSelection()
                 } label: {
-                    Label("Clear", systemImage: "xmark.circle")
+                    Label("common_clear", systemImage: "xmark.circle")
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
@@ -74,7 +74,7 @@ struct SelectionToolbar: View {
                             showingRenameDialog = true
                         }
                     } label: {
-                        Label("Rename", systemImage: "pencil")
+                        Label("common_rename", systemImage: "pencil")
                             .font(.caption)
                     }
                     .buttonStyle(.borderless)
@@ -85,7 +85,7 @@ struct SelectionToolbar: View {
                     Button {
                         showingExtensionDialog = true
                     } label: {
-                        Label("Change Ext", systemImage: "doc.badge.gearshape")
+                        Label("file_browser_btn_change_ext", systemImage: "doc.badge.gearshape")
                             .font(.caption)
                     }
                     .buttonStyle(.borderless)
@@ -96,7 +96,7 @@ struct SelectionToolbar: View {
                     Button {
                         onDownload()
                     } label: {
-                        Label(isSingleSelection ? "Download to Mac" : "Download All to Mac", systemImage: "arrow.down.circle.fill")
+                        Label(isSingleSelection ? "file_browser_btn_download_to_mac" : "file_browser_btn_download_all_to_mac", systemImage: "arrow.down.circle.fill")
                             .font(.caption)
                     }
                     .buttonStyle(.borderless)
@@ -106,7 +106,7 @@ struct SelectionToolbar: View {
                 Button {
                     showingDeleteConfirmation = true
                 } label: {
-                    Label(isSingleSelection ? "Move to Trash" : "Move All to Trash", systemImage: "trash.fill")
+                    Label(isSingleSelection ? "file_browser_btn_move_to_trash" : "file_browser_btn_move_all_to_trash", systemImage: "trash.fill")
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
@@ -117,7 +117,7 @@ struct SelectionToolbar: View {
                     Button {
                         showingPermanentDeleteConfirmation = true
                     } label: {
-                        Label(isSingleSelection ? "Delete Permanently" : "Delete All Permanently", systemImage: "trash.slash.fill")
+                        Label(isSingleSelection ? "file_browser_btn_delete_permanently" : "file_browser_btn_delete_all_permanently", systemImage: "trash.slash.fill")
                             .font(.caption)
                     }
                     .buttonStyle(.borderless)
@@ -129,47 +129,47 @@ struct SelectionToolbar: View {
             .background(.regularMaterial)
         }
         // Move to Trash confirmation
-        .alert(isSingleSelection ? "Move \(singleItem?.name ?? "item") to Trash?" : "Move \(selectedCount) items to Trash?",
+        .alert(isSingleSelection ? String.localized("file_browser_alert_move_item_to_trash_format", singleItem?.name ?? "") : String.localized("file_browser_alert_move_items_to_trash_format", selectedCount),
                isPresented: $showingDeleteConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Move to Trash", role: .destructive) {
+            Button("common_cancel", role: .cancel) { }
+            Button("file_browser_btn_move_to_trash", role: .destructive) {
                 onDelete()
             }
         } message: {
-            Text("You can restore \(isSingleSelection ? "this item" : "these items") from the Trash.")
+            Text(isSingleSelection ? "file_browser_alert_restore_single_message" : "file_browser_alert_restore_multiple_message")
         }
         // Permanent delete confirmation
-        .alert(isSingleSelection ? "Permanently delete \(singleItem?.name ?? "item")?" : "Permanently delete \(selectedCount) items?",
+        .alert(isSingleSelection ? String.localized("file_browser_alert_delete_item_permanently_format", singleItem?.name ?? "") : String.localized("file_browser_alert_delete_items_permanently_format", selectedCount),
                isPresented: $showingPermanentDeleteConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Delete Permanently", role: .destructive) {
+            Button("common_cancel", role: .cancel) { }
+            Button("file_browser_btn_delete_permanently", role: .destructive) {
                 onPermanentDelete?()
             }
         } message: {
-            Text("This will erase \(isSingleSelection ? "this item" : "these items") immediately and cannot be undone")
+            Text(isSingleSelection ? "file_browser_alert_permanent_single_message" : "file_browser_alert_permanent_multiple_message")
         }
         // Rename dialog
-        .alert("Rename \(singleItem?.isDirectory == true ? "folder" : "file")", isPresented: $showingRenameDialog) {
-            TextField("New name", text: $newFileName)
-            Button("Cancel", role: .cancel) {
+        .alert(singleItem?.isDirectory == true ? String.localized("file_browser_dialog_rename_folder_title") : String.localized("file_browser_dialog_rename_file_title"), isPresented: $showingRenameDialog) {
+            TextField("file_browser_dialog_new_name_placeholder", text: $newFileName)
+            Button("common_cancel", role: .cancel) {
                 newFileName = ""
             }
-            Button("Rename") {
+            Button("common_rename") {
                 if let item = singleItem, !newFileName.isEmpty && newFileName != item.name {
                     onRename?(item, newFileName)
                 }
                 newFileName = ""
             }
         } message: {
-            Text("Enter a new name for \(singleItem?.name ?? "this item")")
+            Text(String.localized("file_browser_dialog_rename_message_format", singleItem?.name ?? ""))
         }
         // Change extension dialog
-        .alert("Change Extension", isPresented: $showingExtensionDialog) {
-            TextField("New extension (e.g., jpg, png)", text: $newExtension)
-            Button("Cancel", role: .cancel) {
+        .alert(String.localized("file_browser_dialog_change_extension_title"), isPresented: $showingExtensionDialog) {
+            TextField("file_browser_dialog_new_extension_placeholder", text: $newExtension)
+            Button("common_cancel", role: .cancel) {
                 newExtension = ""
             }
-            Button("Apply to \(selectedCount) files") {
+            Button(String.localized("file_browser_dialog_apply_files_format", selectedCount)) {
                 if !newExtension.isEmpty {
                     let ext = newExtension.hasPrefix(".") ? String(newExtension.dropFirst()) : newExtension
                     onChangeExtension?(ext)
@@ -177,7 +177,7 @@ struct SelectionToolbar: View {
                 newExtension = ""
             }
         } message: {
-            Text("Change extension for all \(selectedCount) selected files")
+            Text(String.localized("file_browser_dialog_change_extension_message_format", selectedCount))
         }
     }
 }

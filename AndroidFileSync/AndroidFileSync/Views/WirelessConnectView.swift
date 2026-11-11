@@ -665,9 +665,9 @@ struct WirelessConnectView: View {
                 .foregroundColor(.blue)
             
             VStack(alignment: .leading, spacing: 2) {
-                Text("Connect via WiFi")
+                Text("wireless_connect_title")
                     .font(.headline)
-                Text("Android 11+ Wireless Debugging")
+                Text("wireless_connect_subtitle")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -742,7 +742,7 @@ struct WirelessConnectView: View {
                             HStack(spacing: 5) {
                                 Image(systemName: "arrow.triangle.2.circlepath")
                                     .font(.caption)
-                                Text("Regenerate")
+                                Text("wireless_btn_regenerate")
                             }
                             .font(.subheadline.weight(.medium))
                             .foregroundColor(.blue)
@@ -759,7 +759,7 @@ struct WirelessConnectView: View {
                             HStack(spacing: 5) {
                                 Image(systemName: "arrow.clockwise")
                                     .font(.caption)
-                                Text("Try Again")
+                                Text("common_try_again")
                             }
                             .font(.subheadline.weight(.medium))
                             .foregroundColor(.blue)
@@ -805,7 +805,7 @@ struct WirelessConnectView: View {
                     .fill(Color.green)
                     .frame(width: 7, height: 7)
                     .shadow(color: Color.green.opacity(0.6), radius: 4, x: 0, y: 0)
-                Text("Ready to pair — waiting for phone to scan")
+                Text("wireless_status_ready_to_pair")
                     .font(.caption.weight(.medium))
                     .foregroundColor(.green)
             }
@@ -839,9 +839,9 @@ struct WirelessConnectView: View {
                 )
 
             VStack(spacing: 5) {
-                Text("Scan with your phone")
+                Text("wireless_scan_with_phone")
                     .font(.subheadline.weight(.semibold))
-                Text("Open Wireless Debugging → Pair device with QR code")
+                Text("wireless_open_qr_pair_step")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -903,13 +903,13 @@ struct WirelessConnectView: View {
                     .tint(.blue)
             }
             VStack(spacing: 5) {
-                Text("Pairing with your device…")
+                Text("wireless_status_pairing_with_device_ellipsis")
                     .font(.headline)
-                Text("Keep Wireless Debugging open on your phone.")
+                Text("wireless_keep_window_open")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
-                Text("If macOS asks, allow Local Network access.")
+                Text("wireless_local_network_prompt")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -951,9 +951,9 @@ struct WirelessConnectView: View {
                         )
                     )
             }
-            Text("Connected!")
+            Text("common_connected_exclamation")
                 .font(.headline)
-            Text("Your device is paired and connected wirelessly.")
+            Text("wireless_connected_wirelessly_status")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -988,7 +988,7 @@ struct WirelessConnectView: View {
                     .font(.system(size: 30))
                     .foregroundColor(.orange)
             }
-            Text("Pairing Failed")
+            Text("wireless_status_pairing_failed")
                 .font(.headline)
             Text(message)
                 .font(.caption)
@@ -1020,7 +1020,7 @@ struct WirelessConnectView: View {
                 Image(systemName: "info.circle.fill")
                     .font(.caption)
                     .foregroundColor(.blue.opacity(0.7))
-                Text("How to pair with QR code")
+                Text("wireless_qr_instructions_title")
                     .font(.caption.weight(.semibold))
                     .foregroundColor(.primary.opacity(0.85))
             }
@@ -1038,7 +1038,7 @@ struct WirelessConnectView: View {
                 Image(systemName: "wifi")
                     .font(.system(size: 9))
                     .foregroundColor(.orange.opacity(0.8))
-                Text("Both devices must be on the same Wi-Fi network")
+                Text("wireless_same_network_note")
                     .font(.caption2)
                     .foregroundColor(.orange.opacity(0.8))
             }
@@ -1127,7 +1127,7 @@ struct WirelessConnectView: View {
                             HStack(spacing: 6) {
                                 Image(systemName: "wifi.circle")
                                     .foregroundColor(.blue)
-                                Text("Other devices on network")
+                                Text("wireless_tab_other_network_devices")
                                     .font(.subheadline.weight(.medium))
                                 Spacer()
                                 Image(systemName: "chevron.down")
@@ -1153,7 +1153,7 @@ struct WirelessConnectView: View {
                                 HStack(spacing: 8) {
                                     Image(systemName: "info.circle")
                                         .foregroundColor(.blue)
-                                    Text("How to pair your Android device")
+                                    Text("wireless_instructions_title")
                                         .font(.subheadline.weight(.semibold))
                                 }
                                 VStack(alignment: .leading, spacing: 8) {
@@ -1177,7 +1177,7 @@ struct WirelessConnectView: View {
                             Button(action: startAutoDiscovery) {
                                 HStack(spacing: 8) {
                                     Image(systemName: "magnifyingglass")
-                                    Text("Start Auto-Discovery")
+                                    Text("wireless_btn_start_auto_discovery")
                                 }
                                 .font(.body.weight(.semibold))
                                 .foregroundColor(.white)
@@ -1197,9 +1197,9 @@ struct WirelessConnectView: View {
                                 ProgressView()
                                     .scaleEffect(1.3)
                                     .padding(.top, 8)
-                                Text("Scanning for devices on your network…")
+                                Text("wireless_status_scanning_devices_network")
                                     .font(.headline)
-                                Text("Make sure Wireless Debugging is turned on\nand 'Pair device with pairing code' is open on your phone.")
+                                Text("wireless_make_sure_debugging_on")
                                     .font(.subheadline)
                                     .foregroundColor(.secondary)
                                     .multilineTextAlignment(.center)
@@ -1224,7 +1224,7 @@ struct WirelessConnectView: View {
                     if status != .idle {
                         // Bottom: Cancel + Search Again
                         HStack {
-                            Button("Cancel") { dismiss() }
+                            Button("common_cancel") { dismiss() }
                                 .keyboardShortcut(.cancelAction)
                                 .foregroundColor(.secondary)
                             Spacer()
@@ -1232,7 +1232,7 @@ struct WirelessConnectView: View {
                                 Button(action: startAutoDiscovery) {
                                     HStack(spacing: 4) {
                                         Image(systemName: "arrow.clockwise")
-                                        Text("Search Again")
+                                        Text("wireless_btn_search_again")
                                     }
                                     .font(.subheadline)
                                 }
@@ -1303,7 +1303,7 @@ struct WirelessConnectView: View {
                                 .font(.subheadline.weight(.semibold))
                             Spacer()
                             if sortedKeys.count > 1 {
-                                Text("Tap to select")
+                                Text("wireless_status_tap_to_select")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
@@ -1383,16 +1383,16 @@ struct WirelessConnectView: View {
                                     .foregroundColor(.blue)
                             }
                         } else if isAlreadyPaired {
-                            Text("Already paired · tap to connect")
+                            Text("wireless_status_already_paired_connect")
                                 .foregroundColor(.green)
                         } else if dev?.connectPort != nil {
                             // Device has wireless debugging on — may be paired or not.
                             // We can't check without calling adb connect (triggers phone notification).
                             // Show neutral prompt — user taps to connect.
-                            Text("Tap to connect")
+                            Text("wireless_status_tap_to_connect")
                                 .foregroundColor(.blue)
                         } else {
-                            Text("Needs pairing")
+                            Text("wireless_status_needs_pairing")
                                 .foregroundColor(.orange)
                         }
                     }
@@ -1439,11 +1439,11 @@ struct WirelessConnectView: View {
             VStack(spacing: 10) {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
-                    Text("Currently Connected")
+                    Text("empty_state_currently_connected")
                         .font(.subheadline.weight(.semibold)).foregroundColor(.green)
                 }
                 Button(action: { Task { await deviceManager.disconnectWireless() } }) {
-                    Label("Disconnect", systemImage: "xmark.circle")
+                    Label("common_disconnect", systemImage: "xmark.circle")
                         .font(.subheadline.weight(.medium))
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
@@ -1533,14 +1533,14 @@ struct WirelessConnectView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Pairing Port").font(.subheadline.weight(.medium))
+                        Text("wireless_field_pairing_port").font(.subheadline.weight(.medium))
                         TextField("e.g. 41583", text: $visiblePairingPort)
                             .textFieldStyle(.roundedBorder)
                             .font(.body.monospacedDigit())
                             .disabled(isPairingThisDevice)
                     }
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("6-Digit Code").font(.subheadline.weight(.medium))
+                        Text("wireless_tab_pairing_code").font(.subheadline.weight(.medium))
                         TextField("000000", text: $autoPairingCode)
                             .textFieldStyle(.roundedBorder)
                             .font(.body.monospacedDigit())
@@ -1555,7 +1555,7 @@ struct WirelessConnectView: View {
                             Text("Pairing...")
                         } else {
                             Image(systemName: "link")
-                            Text("Pair & Connect")
+                            Text("wireless_btn_pair_connect")
                         }
                     }
                     .font(.subheadline.weight(.medium))
@@ -1569,7 +1569,7 @@ struct WirelessConnectView: View {
                 .disabled(autoPairingCode.count != 6 || visiblePairingPort.isEmpty || isPairingThisDevice)
                 
                 if visiblePairingPort.isEmpty {
-                    Text("Enter the pairing port and code shown on your phone's 'Pair device' screen")
+                    Text("wireless_enter_port_code_step")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -1789,7 +1789,7 @@ struct WirelessConnectView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 6) {
                         Image(systemName: "rectangle.stack").font(.system(size: 12)).foregroundColor(.secondary)
-                        Text("Other available devices").font(.subheadline.weight(.semibold))
+                        Text("wireless_tab_other_devices").font(.subheadline.weight(.semibold))
                     }
                     .padding(.horizontal, 16).padding(.top, 12)
                     ForEach(otherDevices, id: \.serial) { dev in
@@ -1818,7 +1818,7 @@ struct WirelessConnectView: View {
                                         .font(.caption).foregroundColor(.secondary).lineLimit(1)
                                 }
                                 Spacer()
-                                Text("Switch").font(.caption.weight(.semibold)).foregroundColor(.white)
+                                Text("common_switch").font(.caption.weight(.semibold)).foregroundColor(.white)
                                     .padding(.horizontal, 10).padding(.vertical, 4)
                                     .background(Capsule().fill(devColor))
                             }
@@ -1870,7 +1870,7 @@ struct WirelessConnectView: View {
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
-                Text("Pairing with device...")
+                Text("wireless_status_pairing_device_dots")
                     .font(.subheadline)
             }
             .padding(10)
@@ -1883,7 +1883,7 @@ struct WirelessConnectView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)
-                    Text("Device found! Ready to pair.")
+                    Text("wireless_device_found_ready")
                         .font(.subheadline)
                         .foregroundColor(.green)
                 }
@@ -1893,7 +1893,7 @@ struct WirelessConnectView: View {
                 HStack(spacing: 8) {
                     ProgressView()
                         .scaleEffect(0.7)
-                    Text("Pairing with device...")
+                    Text("wireless_status_pairing_device_dots")
                         .font(.subheadline)
                 }
                 .padding(10)
@@ -1902,7 +1902,7 @@ struct WirelessConnectView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)
-                    Text("Paired & Connected!")
+                    Text("wireless_status_paired_connected")
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(.green)
                 }
@@ -1932,7 +1932,7 @@ struct WirelessConnectView: View {
             Text("Before You Start")
                 .font(.title3.weight(.bold))
             
-            Text("Make sure you've done these on your Android phone:")
+            Text("wireless_make_sure_phone_steps")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -1950,7 +1950,7 @@ struct WirelessConnectView: View {
                     .fill(Color(NSColor.controlBackgroundColor))
             )
             
-            Text("Both devices must be on the same WiFi network")
+            Text("wireless_same_network_wifi")
                 .font(.caption)
                 .foregroundColor(.orange)
             
@@ -1958,7 +1958,7 @@ struct WirelessConnectView: View {
                 hasSeenWifiSetup = true
                 showSetupPopup = false
             }) {
-                Text("Got it, let's connect")
+                Text("wireless_got_it_connect")
                     .font(.headline)
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
@@ -1991,7 +1991,7 @@ struct WirelessConnectView: View {
             Button(action: { hidePairingSteps = false }) {
                 HStack(spacing: 4) {
                     Image(systemName: "questionmark.circle")
-                    Text("Show setup steps")
+                    Text("wireless_show_setup_steps")
                 }
                 .font(.caption)
                 .foregroundColor(.blue)
@@ -2009,7 +2009,7 @@ struct WirelessConnectView: View {
                     stepRow("Tap 'Pair device with pairing code'")
                 }
                 Button(action: { hidePairingSteps = true }) {
-                    Text("Got it, don't show again")
+                    Text("wireless_got_it_dont_show")
                         .font(.caption)
                         .foregroundColor(.blue)
                 }
@@ -2213,7 +2213,7 @@ struct WirelessConnectView: View {
             VStack(spacing: 20) {
                 // Instructions
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Setup Instructions")
+                    Text("wireless_setup_steps_title")
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(.secondary)
                     
@@ -2256,17 +2256,17 @@ struct WirelessConnectView: View {
                     .font(.subheadline.weight(.medium))
                 TextField("e.g. 192.168.1.100", text: $ipAddress)
                     .textFieldStyle(.roundedBorder)
-                Text("Find this on your phone in Wireless Debugging.")
+                Text("wireless_code_screen_hint")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Connection Port")
+                Text("wireless_field_connection_port")
                     .font(.subheadline.weight(.medium))
                 TextField("e.g. 41235", text: $connectPort)
                     .textFieldStyle(.roundedBorder)
-                Text("Use the port shown in Wireless Debugging under IP address & Port (not the pairing screen).")
+                Text("wireless_connection_port_hint")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -2288,7 +2288,7 @@ struct WirelessConnectView: View {
                             .font(.subheadline.weight(.medium))
                         TextField("e.g. 482604", text: $pairingCode)
                             .textFieldStyle(.roundedBorder)
-                        Text("Enter the 6-digit code from 'Pair device with pairing code'.")
+                        Text("wireless_enter_6digit_code_step")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -2296,7 +2296,7 @@ struct WirelessConnectView: View {
             }
 
             Toggle(isOn: $showConnectOnly) {
-                Text("Already paired — just connect")
+                Text("wireless_status_already_paired_just_connect")
                     .font(.subheadline)
             }
             .toggleStyle(.checkbox)
@@ -2332,7 +2332,7 @@ struct WirelessConnectView: View {
     
     private var manualActionButtons: some View {
         HStack {
-            Button("Cancel") { dismiss() }
+            Button("common_cancel") { dismiss() }
                 .keyboardShortcut(.cancelAction)
             
             Spacer()

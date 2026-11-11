@@ -27,7 +27,7 @@ struct HeaderView: View {
                 Button(action: { showWirelessConnect = true }) {
                     HStack(spacing: 4) {
                         Image(systemName: "wifi")
-                        Text("WiFi")
+                        Text("header_btn_wifi")
                             .font(.caption)
                     }
                     .padding(.horizontal, 8)
@@ -38,7 +38,7 @@ struct HeaderView: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .help("Connect via WiFi (Android 11+)")
+                .help(Text("header_help_connect_wifi"))
             }
             
             if deviceManager.isConnected {
@@ -47,7 +47,7 @@ struct HeaderView: View {
                         ConnectionBadge(type: deviceManager.connectionType)
                     }
                     .buttonStyle(.plain)
-                    .help("Manage WiFi connection")
+                    .help(Text("header_help_manage_wifi"))
                 } else {
                     ConnectionBadge(type: deviceManager.connectionType)
                 }
@@ -65,7 +65,7 @@ struct HeaderView: View {
     
     private var deviceInfo: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("AndroidFileSync")
+            Text("app_name")
                 .font(.headline)
             
             HStack(spacing: 4) {

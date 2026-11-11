@@ -33,7 +33,7 @@ struct FilePreviewPanel: View {
                 .ignoresSafeArea()
                 .onTapGesture { dismiss() }
                 .accessibilityAddTraits(.isButton)
-                .accessibilityLabel("Close preview")
+                .accessibilityLabel(Text("file_preview_action_close"))
             
             // Full content area panel
             panelContent
@@ -163,7 +163,7 @@ struct FilePreviewPanel: View {
             }
             .buttonStyle(.plain)
             .keyboardShortcut(.escape, modifiers: [])
-            .accessibilityLabel("Close preview")
+            .accessibilityLabel(Text("file_preview_action_close"))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -332,7 +332,7 @@ struct FilePreviewPanel: View {
                         Button {
                             previewManager.cancelPreview()
                         } label: {
-                            Text("Cancel")
+                            Text("common_cancel")
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(.white.opacity(0.8))
                                 .padding(.horizontal, 10)
@@ -359,7 +359,7 @@ struct FilePreviewPanel: View {
                                     .offset(x: 2)
                             }
                             
-                            Text("Open in App to play")
+                            Text("file_preview_open_to_play_video")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 12)
@@ -439,7 +439,7 @@ struct FilePreviewPanel: View {
             
             fileInfoStack
             
-            Text("Open in App to play audio")
+            Text("file_preview_open_to_play_audio")
                 .font(.system(size: 12))
                 .foregroundStyle(.tertiary)
         }
@@ -563,7 +563,7 @@ struct FilePreviewPanel: View {
             Button {
                 previewManager.openInExternalApp()
             } label: {
-                Label("Open in App", systemImage: "arrow.up.forward.app")
+                Label("file_preview_action_open_in_app", systemImage: "arrow.up.forward.app")
                     .font(.system(size: 12, weight: .medium))
             }
             .buttonStyle(.borderedProminent)
@@ -1319,7 +1319,7 @@ struct QuickLookZoomControlBar: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("축소 (⌘ -)")
+            .help(Text("file_preview_help_zoom_out"))
 
             // Percentage Display
             Text("\(Int(round(coordinator.scaleFactor * 100)))%")
@@ -1328,7 +1328,7 @@ struct QuickLookZoomControlBar: View {
                 .frame(minWidth: 40)
                 .padding(.vertical, 2)
                 .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 3))
-                .help("100%로 재설정 (⌘ 0)")
+                .help(Text("file_preview_help_zoom_reset"))
                 .onTapGesture {
                     coordinator.resetZoom()
                 }
@@ -1344,7 +1344,7 @@ struct QuickLookZoomControlBar: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("확대 (⌘ +)")
+            .help(Text("file_preview_help_zoom_in"))
 
             dividerLine
 
@@ -1359,7 +1359,7 @@ struct QuickLookZoomControlBar: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("실제 크기 100% (⌘ 0)")
+            .help(Text("file_preview_help_actual_size"))
         }
         .padding(.horizontal, 7)
         .padding(.vertical, 3)
@@ -1400,7 +1400,7 @@ struct PDFZoomControlBar: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("축소 (Zoom Out / ⌘ -)")
+            .help(Text("file_preview_help_zoom_out"))
 
             // Percentage Display
             Text("\(Int(round(coordinator.scaleFactor * 100)))%")
@@ -1409,7 +1409,7 @@ struct PDFZoomControlBar: View {
                 .frame(minWidth: 40)
                 .padding(.vertical, 2)
                 .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 3))
-                .help("100%로 재설정 (⌘ 0)")
+                .help(Text("file_preview_help_zoom_reset"))
                 .onTapGesture {
                     coordinator.resetZoom()
                 }
@@ -1425,7 +1425,7 @@ struct PDFZoomControlBar: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("확대 (Zoom In / ⌘ +)")
+            .help(Text("file_preview_help_zoom_in"))
 
             dividerLine
 
@@ -1438,7 +1438,7 @@ struct PDFZoomControlBar: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("가로 맞춤")
+            .help(Text("file_preview_help_fit_width"))
 
             // Fit to Height (세로맞춤)
             Button {
@@ -1449,7 +1449,7 @@ struct PDFZoomControlBar: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("세로 맞춤")
+            .help(Text("file_preview_help_fit_height"))
 
             dividerLine
 
@@ -1464,14 +1464,14 @@ struct PDFZoomControlBar: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("문서 맨 위로 이동 (⌘ + ↑)")
+            .help(Text("file_preview_help_scroll_top"))
 
             // Scroll Step Selector (방향키 스크롤 이동량 조절)
             Menu {
-                Button("미세 이동 (40 pt)") { coordinator.scrollStep = 40 }
-                Button("기본 이동 (80 pt)") { coordinator.scrollStep = 80 }
-                Button("빠른 이동 (140 pt)") { coordinator.scrollStep = 140 }
-                Button("반 페이지 (250 pt)") { coordinator.scrollStep = 250 }
+                Button(String.localized("file_preview_scroll_fine")) { coordinator.scrollStep = 40 }
+                Button(String.localized("file_preview_scroll_default")) { coordinator.scrollStep = 80 }
+                Button(String.localized("file_preview_scroll_fast")) { coordinator.scrollStep = 140 }
+                Button(String.localized("file_preview_scroll_half_page")) { coordinator.scrollStep = 250 }
             } label: {
                 HStack(spacing: 3) {
                     Image(systemName: "arrow.up.and.down")
@@ -1486,7 +1486,7 @@ struct PDFZoomControlBar: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .help("방향키 스크롤 이동 거리 설정 (선택 저장됨)")
+            .help(Text("file_preview_help_scroll_step"))
         }
         .padding(.horizontal, 7)
         .padding(.vertical, 3)
@@ -1583,7 +1583,7 @@ struct PDFThumbnailSidebarView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Toggle thumbnails")
+                .help(Text("file_preview_help_toggle_thumbnails"))
 
                 Text("\(coordinator.currentPageIndex + 1)")
                     .font(.system(size: 16, weight: .bold, design: .rounded))
