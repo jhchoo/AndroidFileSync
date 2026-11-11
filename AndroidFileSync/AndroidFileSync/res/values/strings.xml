@@ -292,6 +292,7 @@ Do you want to delete it?</string>
     <string name="sidebar_dialog_rename_group_title">Rename Group</string>
     <string name="sidebar_group_favorites">Favorites</string>
     <string name="sidebar_group_quick_access">Quick Access</string>
+    <string name="sidebar_group_quick_access_desc">Add to Sidebar or drop here</string>
     <string name="sidebar_help_restore_hidden">Restore hidden default folders</string>
     <string name="sidebar_item_apps">Apps</string>
     <string name="sidebar_item_camera">Camera</string>

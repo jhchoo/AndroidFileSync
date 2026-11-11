@@ -489,7 +489,7 @@ struct SidebarView: View {
                     if qaItems.isEmpty {
                         EmptyGroupDropPlaceholder(
                             groupId: "quick_access",
-                            message: "Add folders via 'Add to Sidebar' or drop here",
+                            message: String.localized("sidebar_group_quick_access_desc"),
                             sidebarManager: sidebarManager
                         )
                         .listRowBackground(Color.clear)

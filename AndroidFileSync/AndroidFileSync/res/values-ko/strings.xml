@@ -292,6 +292,7 @@
     <string name="sidebar_dialog_rename_group_title">그룹 이름 변경</string>
     <string name="sidebar_group_favorites">즐겨찾기</string>
     <string name="sidebar_group_quick_access">빠른 접근</string>
+    <string name="sidebar_group_quick_access_desc">사이드바 추가 또는 여기에 놓기</string>
     <string name="sidebar_help_restore_hidden">숨겨진 기본 폴더 복원</string>
     <string name="sidebar_item_apps">앱</string>
     <string name="sidebar_item_camera">카메라</string>
