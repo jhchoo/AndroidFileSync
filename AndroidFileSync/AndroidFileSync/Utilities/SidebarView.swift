@@ -696,11 +696,6 @@ struct SidebarView: View {
                         title: "GitHub",
                         destination: URL(string: "https://github.com/jhchoo/AndroidFileSync")!
                     )
-                    FooterLink(
-                        icon: PayPalIcon(size: 16, color: .secondary),
-                        title: "Donate",
-                        destination: URL(string: "https://paypal.me/jhchoo")!
-                    )
                     Spacer()
                 }
                 .padding(.horizontal, 16)
@@ -1518,79 +1513,4 @@ struct GitHubIcon: View {
     }
 }
 
-// MARK: - PayPal Icon Drawing
 
-struct PayPalIcon: View {
-    var size: CGFloat = 16
-    var color: Color = .secondary
-
-    private let darkBlue  = Color(red: 0.0,   green: 0.19,  blue: 0.53)   // #003087
-    private let lightBlue = Color(red: 0.0,   green: 0.612, blue: 0.87)   // #009CDE
-
-    var body: some View {
-        Canvas { context, canvasSize in
-            context.scaleBy(x: canvasSize.width / 24, y: canvasSize.height / 24)
-
-            context.translateBy(x: 2.0, y: 1.5)
-            drawP(in: &context, fillColor: lightBlue)
-            context.translateBy(x: -2.0, y: -1.5)
-
-            drawP(in: &context, fillColor: darkBlue)
-        }
-        .frame(width: size, height: size)
-        .compositingGroup()
-    }
-
-    private func drawP(in context: inout GraphicsContext, fillColor: Color) {
-        context.drawLayer { layerCtx in
-            var outer = Path()
-            outer.move(to: CGPoint(x: 7.076, y: 21.337))
-            outer.addLine(to: CGPoint(x: 4.162, y: 21.337))
-            outer.addCurve(to: CGPoint(x: 3.678, y: 20.877),
-                           control1: CGPoint(x: 3.872, y: 21.337),
-                           control2: CGPoint(x: 3.639, y: 21.143))
-            outer.addLine(to: CGPoint(x: 5.958, y: 3.613))
-            outer.addCurve(to: CGPoint(x: 6.558, y: 3.003),
-                           control1: CGPoint(x: 6.018, y: 3.253),
-                           control2: CGPoint(x: 6.258, y: 3.003))
-            outer.addLine(to: CGPoint(x: 12.578, y: 3.003))
-            outer.addCurve(to: CGPoint(x: 17.898, y: 7.483),
-                           control1: CGPoint(x: 15.578, y: 3.003),
-                           control2: CGPoint(x: 17.898, y: 4.583))
-            outer.addCurve(to: CGPoint(x: 13.798, y: 12.503),
-                           control1: CGPoint(x: 17.898, y: 10.103),
-                           control2: CGPoint(x: 16.198, y: 12.503))
-            outer.addLine(to: CGPoint(x: 10.298, y: 12.503))
-            outer.addCurve(to: CGPoint(x: 9.698, y: 13.113),
-                           control1: CGPoint(x: 9.998, y: 12.503),
-                           control2: CGPoint(x: 9.738, y: 12.753))
-            outer.addLine(to: CGPoint(x: 7.076, y: 21.337))
-            outer.closeSubpath()
-
-            layerCtx.fill(outer, with: .color(fillColor))
-
-            var inner = Path()
-            inner.move(to: CGPoint(x: 9.498, y: 6.003))
-            inner.addLine(to: CGPoint(x: 8.298, y: 6.003))
-            inner.addCurve(to: CGPoint(x: 7.698, y: 6.613),
-                           control1: CGPoint(x: 7.998, y: 6.003),
-                           control2: CGPoint(x: 7.738, y: 6.253))
-            inner.addLine(to: CGPoint(x: 7.098, y: 10.003))
-            inner.addCurve(to: CGPoint(x: 7.578, y: 10.503),
-                           control1: CGPoint(x: 7.058, y: 10.283),
-                           control2: CGPoint(x: 7.278, y: 10.503))
-            inner.addLine(to: CGPoint(x: 12.258, y: 10.503))
-            inner.addCurve(to: CGPoint(x: 14.378, y: 8.003),
-                           control1: CGPoint(x: 13.578, y: 10.503),
-                           control2: CGPoint(x: 14.378, y: 9.403))
-            inner.addCurve(to: CGPoint(x: 12.258, y: 6.003),
-                           control1: CGPoint(x: 14.378, y: 6.803),
-                           control2: CGPoint(x: 13.458, y: 6.003))
-            inner.addLine(to: CGPoint(x: 9.498, y: 6.003))
-            inner.closeSubpath()
-
-            layerCtx.blendMode = .destinationOut
-            layerCtx.fill(inner, with: .color(.white))
-        }
-    }
-}

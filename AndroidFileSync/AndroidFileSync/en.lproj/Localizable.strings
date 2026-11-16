@@ -67,7 +67,6 @@
 "Disconnect" = "Disconnect";
 "Disconnected" = "Disconnected";
 "Document Preview" = "Document Preview";
-"Donate via PayPal" = "Donate via PayPal";
 "Download to Mac" = "Download to Mac";
 "Downloads Only (%lld)" = "Downloads Only (%lld)";
 "Dual Pane" = "Dual Pane";
@@ -84,10 +83,7 @@
 "Force Stop" = "Force Stop";
 "Go to %@" = "Go to %@";
 "IP Address" = "IP Address";
-"If AndroidFileSync has been useful, consider a small donation to help keep it free and actively maintained. Thank you!" = "If AndroidFileSync has been useful, consider a small donation to help keep it free and actively maintained. Thank you!";
-"If the app saved you time, a GitHub star helps other users find it. If something can be better, feedback is welcome too." = "If the app saved you time, a GitHub star helps other users find it. If something can be better, feedback is welcome too.";
 "Image preview. Double-click to zoom." = "Image preview. Double-click to zoom.";
-"Is AndroidFileSync helping you?" = "Is AndroidFileSync helping you?";
 "Keep Both" = "Keep Both";
 "Last checked at %@" = "Last checked at %@";
 "Last completed connection check" = "Last completed connection check";
@@ -140,7 +136,6 @@
 "Search apps..." = "Search apps...";
 "Search files..." = "Search files...";
 "Selected" = "Selected";
-"Send Feedback" = "Send Feedback";
 "Show All Transfers (%lld)" = "Show All Transfers (%lld)";
 "Show intermediate folders" = "Show intermediate folders";
 "Shown on 'Pair device with pairing code' screen e.g.(xxx.xxx.x.xx:37215)" = "Shown on 'Pair device with pairing code' screen e.g.(xxx.xxx.x.xx:37215)";
@@ -148,9 +143,7 @@
 "Size" = "Size";
 "Skip" = "Skip";
 "Sort files" = "Sort files";
-"Star on GitHub" = "Star on GitHub";
 "Stop operation" = "Stop operation";
-"Support AndroidFileSync ❤️" = "Support AndroidFileSync ❤️";
 "Switch back to dynamic auto mode" = "Switch back to dynamic auto mode";
 "System" = "System";
 "Tap to connect" = "Tap to connect";
@@ -473,7 +466,6 @@
 "report_issue_or_enable_logs" = "Report an issue or enable diagnostic logs";
 "report_issue_restart_now" = "Restart Now";
 "report_issue_save_diagnostics" = "Save diagnostics…";
-"report_issue_send_feedback" = "Send Feedback";
 "report_issue_title" = "Report Issue";
 "report_issue_title_lower" = "Report an issue";
 "report_issue_title_plain" = "Report an Issue";
@@ -519,12 +511,6 @@
 "storage_access_fixing" = "Fixing file access…";
 "storage_access_notice" = "Repairing storage access allows access to shared files via Android debugging, including other debugging apps.";
 "storage_access_save_diagnostics" = "Save Diagnostics…";
-"support_donate_paypal" = "Donate via PayPal";
-"support_msg_donation" = "If AndroidFileSync has been useful, consider a small donation to help keep it free and actively maintained. Thank you!";
-"support_msg_feedback" = "If the app saved you time, a GitHub star helps other users find it. If something can be better, feedback is welcome too.";
-"support_star_github" = "Star on GitHub";
-"support_title_heart" = "Support AndroidFileSync ❤️";
-"support_title_helping" = "Is AndroidFileSync helping you?";
 "transfer_btn_cancel_all" = "Cancel All";
 "transfer_btn_cancel_all_active_tasks" = "Cancel All Active Tasks";
 "transfer_btn_cancel_all_downloads_format" = "Cancel All Downloads (%lld)";

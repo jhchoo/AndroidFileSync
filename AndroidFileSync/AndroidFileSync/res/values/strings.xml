@@ -270,7 +270,6 @@
     <string name="report_issue_or_enable_logs">Report an issue or enable diagnostic logs</string>
     <string name="report_issue_restart_now">Restart Now</string>
     <string name="report_issue_save_diagnostics">Save diagnostics…</string>
-    <string name="report_issue_send_feedback">Send Feedback</string>
     <string name="report_issue_title">Report Issue</string>
     <string name="report_issue_title_lower">Report an issue</string>
     <string name="report_issue_title_plain">Report an Issue</string>
@@ -313,12 +312,6 @@ Do you want to delete it?</string>
     <string name="storage_access_fix">Fix storage access</string>
     <string name="storage_access_fix_desc">Fix storage access allows shared file access through Android debugging, including other debugging apps you use.</string>
     <string name="storage_access_fixing">Fixing file access…</string>
-    <string name="support_donate_paypal">Donate via PayPal</string>
-    <string name="support_msg_donation">If AndroidFileSync has been useful, consider a small donation to help keep it free and actively maintained. Thank you!</string>
-    <string name="support_msg_feedback">If the app saved you time, a GitHub star helps other users find it. If something can be better, feedback is welcome too.</string>
-    <string name="support_star_github">Star on GitHub</string>
-    <string name="support_title_heart">Support AndroidFileSync ❤️</string>
-    <string name="support_title_helping">Is AndroidFileSync helping you?</string>
     <string name="transfer_btn_cancel_all">Cancel All</string>
     <string name="transfer_btn_cancel_all_active_tasks">Cancel All Active Tasks</string>
     <string name="transfer_btn_cancel_all_downloads_format">Cancel All Downloads (%d)</string>

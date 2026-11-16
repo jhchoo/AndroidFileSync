@@ -67,7 +67,6 @@
 "Disconnect" = "연결 해제";
 "Disconnected" = "연결 끊김";
 "Document Preview" = "문서 미리보기";
-"Donate via PayPal" = "PayPal로 후원하기";
 "Download to Mac" = "Mac으로 다운로드";
 "Downloads Only (%lld)" = "다운로드만 (%lld)";
 "Dual Pane" = "이중 창";
@@ -84,10 +83,7 @@
 "Force Stop" = "강제 종료";
 "Go to %@" = "%@(으)로 이동";
 "IP Address" = "IP 주소";
-"If AndroidFileSync has been useful, consider a small donation to help keep it free and actively maintained. Thank you!" = "AndroidFileSync가 유용하셨다면, 지속적인 무료 배포와 유지보수를 위해 작은 후원을 고려해 주세요. 감사합니다!";
-"If the app saved you time, a GitHub star helps other users find it. If something can be better, feedback is welcome too." = "앱이 시간을 절약해 드렸다면, 다른 사용자들이 찾을 수 있도록 GitHub 스타를 부탁드립니다. 피드백도 언제든 환영합니다.";
 "Image preview. Double-click to zoom." = "이미지 미리보기. 더블클릭하여 확대할 수 있습니다.";
-"Is AndroidFileSync helping you?" = "AndroidFileSync가 유용하셨나요?";
 "Keep Both" = "둘 다 유지";
 "Last checked at %@" = "마지막 확인: %@";
 "Last completed connection check" = "마지막 연결 상태 확인 완료";
@@ -140,7 +136,6 @@
 "Search apps..." = "앱 검색...";
 "Search files..." = "파일 검색...";
 "Selected" = "선택됨";
-"Send Feedback" = "의견 보내기";
 "Show All Transfers (%lld)" = "모든 전송 표시 (%lld)";
 "Show intermediate folders" = "중간 폴더 표시";
 "Shown on 'Pair device with pairing code' screen e.g.(xxx.xxx.x.xx:37215)" = "'페어링 코드로 기기 페어링' 화면에 표시됨 (예: xxx.xxx.x.xx:37215)";
@@ -148,9 +143,7 @@
 "Size" = "크기";
 "Skip" = "건너뛰기";
 "Sort files" = "파일 정렬";
-"Star on GitHub" = "GitHub에서 별 주기";
 "Stop operation" = "작업 중지";
-"Support AndroidFileSync ❤️" = "AndroidFileSync 후원하기 ❤️";
 "Switch back to dynamic auto mode" = "동적 자동 모드로 전환";
 "System" = "시스템";
 "Tap to connect" = "탭하여 연결";
@@ -473,7 +466,6 @@
 "report_issue_or_enable_logs" = "문제 보고 또는 진단 로그 활성화";
 "report_issue_restart_now" = "지금 재시작";
 "report_issue_save_diagnostics" = "진단 정보 저장…";
-"report_issue_send_feedback" = "의견 보내기";
 "report_issue_title" = "문제 보고";
 "report_issue_title_lower" = "문제 보고";
 "report_issue_title_plain" = "문제 보고";
@@ -519,12 +511,6 @@
 "storage_access_fixing" = "파일 접근 권한 복구 중…";
 "storage_access_notice" = "저장소 접근 권한 복구를 사용하면 다른 디버깅 앱을 포함하여 Android 디버깅을 통한 공유 파일 접근이 허용됩니다.";
 "storage_access_save_diagnostics" = "진단 정보 저장…";
-"support_donate_paypal" = "PayPal로 후원하기";
-"support_msg_donation" = "AndroidFileSync가 도움이 되었다면, 지속적인 무료 배포와 유지보수를 위해 작은 후원을 고려해 주세요. 감사합니다!";
-"support_msg_feedback" = "앱을 통해 시간을 절약하셨다면 GitHub 스타로 다른 사용자들에게 추천해 주세요. 개선할 점이 있다면 언제든 의견을 환영합니다.";
-"support_star_github" = "GitHub에서 별 주기";
-"support_title_heart" = "AndroidFileSync 후원하기 ❤️";
-"support_title_helping" = "AndroidFileSync가 유용하셨나요?";
 "transfer_btn_cancel_all" = "모두 취소";
 "transfer_btn_cancel_all_active_tasks" = "모든 활성 작업 취소";
 "transfer_btn_cancel_all_downloads_format" = "모든 다운로드 취소 (%lld)";

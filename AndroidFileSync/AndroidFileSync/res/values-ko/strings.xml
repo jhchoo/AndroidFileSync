@@ -270,7 +270,6 @@
     <string name="report_issue_or_enable_logs">문제 보고 또는 진단 로그 활성화</string>
     <string name="report_issue_restart_now">지금 재시작</string>
     <string name="report_issue_save_diagnostics">진단 정보 저장…</string>
-    <string name="report_issue_send_feedback">의견 보내기</string>
     <string name="report_issue_title">문제 보고</string>
     <string name="report_issue_title_lower">문제 보고</string>
     <string name="report_issue_title_plain">문제 보고</string>
@@ -313,12 +312,6 @@
     <string name="storage_access_fix">저장소 접근 권한 복구</string>
     <string name="storage_access_fix_desc">저장소 접근 권한 복구를 사용하면 다른 디버깅 앱을 포함하여 Android 디버깅을 통한 공유 파일 접근이 허용됩니다.</string>
     <string name="storage_access_fixing">파일 접근 권한 복구 중…</string>
-    <string name="support_donate_paypal">PayPal로 후원하기</string>
-    <string name="support_msg_donation">AndroidFileSync가 도움이 되었다면, 지속적인 무료 배포와 유지보수를 위해 작은 후원을 고려해 주세요. 감사합니다!</string>
-    <string name="support_msg_feedback">앱을 통해 시간을 절약하셨다면 GitHub 스타로 다른 사용자들에게 추천해 주세요. 개선할 점이 있다면 언제든 의견을 환영합니다.</string>
-    <string name="support_star_github">GitHub에서 별 주기</string>
-    <string name="support_title_heart">AndroidFileSync 후원하기 ❤️</string>
-    <string name="support_title_helping">AndroidFileSync가 유용하셨나요?</string>
     <string name="transfer_btn_cancel_all">모두 취소</string>
     <string name="transfer_btn_cancel_all_active_tasks">모든 활성 작업 취소</string>
     <string name="transfer_btn_cancel_all_downloads_format">모든 다운로드 취소 (%d)</string>

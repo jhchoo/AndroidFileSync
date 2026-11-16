@@ -81,8 +81,6 @@ struct ContentView: View {
     @State private var isUSBOccupied = false
     @State private var isClaimingUSB = false
     @ObservedObject private var updateChecker = UpdateChecker.shared
-    @ObservedObject private var supportPromptManager = SupportPromptManager.shared
-    @ObservedObject private var donationPromptManager = DonationPromptManager.shared
     @ObservedObject private var diagnosticsControl = DiagnosticsControl.shared
 
     // Get Info panel state (⌘I)
@@ -608,29 +606,6 @@ struct ContentView: View {
             } message: {
                 Text(pasteConflictMessage)
             }
-            .alert("Is AndroidFileSync helping you?", isPresented: $supportPromptManager.shouldShowPrompt) {
-                Button("Star on GitHub") {
-                    supportPromptManager.openGitHubAndMarkDone()
-                }
-                Button("Send Feedback") {
-                    supportPromptManager.openFeedbackAndSnooze()
-                }
-                Button("Not Now", role: .cancel) {
-                    supportPromptManager.snooze()
-                }
-            } message: {
-                Text("If the app saved you time, a GitHub star helps other users find it. If something can be better, feedback is welcome too.")
-            }
-            .alert("Support AndroidFileSync ❤️", isPresented: $donationPromptManager.shouldShowPrompt) {
-                Button("Donate via PayPal") {
-                    donationPromptManager.openPayPalAndMarkDone()
-                }
-                Button("Not Now", role: .cancel) {
-                    donationPromptManager.snooze()
-                }
-            } message: {
-                Text("If AndroidFileSync has been useful, consider a small donation to help keep it free and actively maintained. Thank you!")
-            }
             .alert("Result", isPresented: $showGlobalResultAlert) {
                 Button("OK", role: .cancel) {
                     appManager.globalResultMessage = nil
@@ -749,20 +724,6 @@ struct ContentView: View {
                     } else if type == "upload" {
                         self.activeUploadsCount = count
                     }
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .afsDownloadBatchCompleted)) { notification in
-                if let completed = notification.userInfo?["completed"] as? Int,
-                   let total = notification.userInfo?["total"] as? Int {
-                    guard completed > 0, completed == total else { return }
-                    supportPromptManager.recordSuccessfulBatch()
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .afsUploadBatchCompleted)) { notification in
-                if let completed = notification.userInfo?["completed"] as? Int,
-                   let total = notification.userInfo?["total"] as? Int {
-                    guard completed > 0, completed == total else { return }
-                    supportPromptManager.recordSuccessfulBatch()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .afsUploadBatchStateChanged)) { notification in
