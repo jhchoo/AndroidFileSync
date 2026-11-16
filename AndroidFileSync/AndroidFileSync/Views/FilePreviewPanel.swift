@@ -651,6 +651,14 @@ final class PDFPreviewCoordinator: ObservableObject {
 
         // Cmd shortcuts
         if flags.contains(.command) && flags.intersection([.option, .control]).isEmpty {
+            if !flags.contains(.shift),
+               (event.keyCode == 8 || event.charactersIgnoringModifiers?.lowercased() == "c") { // Cmd + C
+                if copySelection() {
+                    return nil
+                }
+                return event
+            }
+
             switch event.keyCode {
             case 24, 69: // Cmd + Plus / Equal / Keypad Plus
                 zoomIn()
@@ -1040,6 +1048,19 @@ final class PDFPreviewCoordinator: ObservableObject {
             scrollView.reflectScrolledClipView(clipView)
             saveCurrentLocation()
         }
+    }
+
+    /// 선택된 PDF 텍스트를 클립보드로 복사 (Command + C)
+    @discardableResult
+    func copySelection() -> Bool {
+        guard let pdfView = currentPDFView,
+              let selection = pdfView.currentSelection,
+              let text = selection.string,
+              !text.isEmpty else {
+            return false
+        }
+        pdfView.copy(nil)
+        return true
     }
 }
 
