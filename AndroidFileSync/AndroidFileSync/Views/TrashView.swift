@@ -18,8 +18,7 @@ struct TrashView: View {
     private var actionBanner: some View {
         HStack(spacing: 8) {
             ProgressView()
-                .scaleEffect(0.65)
-                .frame(width: 14, height: 14)
+                .controlSize(.small)
             Text(fileActionManager.currentAction)
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)

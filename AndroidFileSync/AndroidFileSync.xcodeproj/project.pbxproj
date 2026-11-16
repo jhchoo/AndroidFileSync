@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		AA1000052EC66BC4008AABAB /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = AA1000032EC66BC4008AABAB /* Localizable.strings */; };
+		AA1000062EC66BC4008AABAB /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = AA1000042EC66BC4008AABAB /* InfoPlist.strings */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXCopyFilesBuildPhase section */
 		453BAF2F2EC66C1D008AABAB /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
@@ -19,18 +24,13 @@
 		};
 /* End PBXCopyFilesBuildPhase section */
 
-/* Begin PBXBuildFile section */
-		AA1000052EC66BC4008AABAB /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = AA1000032EC66BC4008AABAB /* Localizable.strings */; };
-		AA1000062EC66BC4008AABAB /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = AA1000042EC66BC4008AABAB /* InfoPlist.strings */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXFileReference section */
+		453BAF092EC66BC4008AABAB /* AndroidFileSync.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AndroidFileSync.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		453BAF1D2EC66C1D008AABAB /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
 		AA1000012EC66BC4008AABAB /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = AndroidFileSync/en.lproj/Localizable.strings; sourceTree = SOURCE_ROOT; };
 		AA1000022EC66BC4008AABAB /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = AndroidFileSync/ko.lproj/Localizable.strings; sourceTree = SOURCE_ROOT; };
 		AA1000072EC66BC4008AABAB /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = AndroidFileSync/en.lproj/InfoPlist.strings; sourceTree = SOURCE_ROOT; };
 		AA1000082EC66BC4008AABAB /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = AndroidFileSync/ko.lproj/InfoPlist.strings; sourceTree = SOURCE_ROOT; };
-		453BAF092EC66BC4008AABAB /* AndroidFileSync.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AndroidFileSync.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		453BAF1D2EC66C1D008AABAB /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -103,27 +103,6 @@
 			target = 453BAF082EC66BC4008AABAB /* AndroidFileSync */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
-/* Begin PBXVariantGroup section */
-		AA1000032EC66BC4008AABAB /* Localizable.strings */ = {
-			isa = PBXVariantGroup;
-			children = (
-				AA1000012EC66BC4008AABAB /* en */,
-				AA1000022EC66BC4008AABAB /* ko */,
-			);
-			name = Localizable.strings;
-			sourceTree = "<group>";
-		};
-		AA1000042EC66BC4008AABAB /* InfoPlist.strings */ = {
-			isa = PBXVariantGroup;
-			children = (
-				AA1000072EC66BC4008AABAB /* en */,
-				AA1000082EC66BC4008AABAB /* ko */,
-			);
-			name = InfoPlist.strings;
-			sourceTree = "<group>";
-		};
-/* End PBXVariantGroup section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		4581BF032ED0772200D2F9EC /* AndroidFileSync */ = {
@@ -204,8 +183,8 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2610;
-				LastUpgradeCheck = 2610;
+				LastSwiftUpdateCheck = 2720;
+				LastUpgradeCheck = 2720;
 				TargetAttributes = {
 					453BAF082EC66BC4008AABAB = {
 						CreatedOnToolsVersion = 26.1;
@@ -233,7 +212,7 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-				453BAF072EC66BC4008AABAB /* Resources */ = {
+		453BAF072EC66BC4008AABAB /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -254,12 +233,34 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXVariantGroup section */
+		AA1000032EC66BC4008AABAB /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				AA1000012EC66BC4008AABAB /* en */,
+				AA1000022EC66BC4008AABAB /* ko */,
+			);
+			name = Localizable.strings;
+			sourceTree = "<group>";
+		};
+		AA1000042EC66BC4008AABAB /* InfoPlist.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				AA1000072EC66BC4008AABAB /* en */,
+				AA1000082EC66BC4008AABAB /* ko */,
+			);
+			name = InfoPlist.strings;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
+
 /* Begin XCBuildConfiguration section */
 		453BAF122EC66BC5008AABAB /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
@@ -289,6 +290,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 34TS8NHVHD;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -314,6 +316,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -324,6 +327,7 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
@@ -353,6 +357,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 34TS8NHVHD;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -371,6 +376,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 			};
 			name = Release;
@@ -386,6 +392,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 3;
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = W33H96C7PY;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -394,16 +401,17 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = /opt/homebrew/include;
 				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
 					/opt/homebrew/lib,
-					/opt/homebrew/Cellar/libmtp/1.1.22/lib,
-					/opt/homebrew/Cellar/libusb/1.0.29/lib,
 				);
+				MACOSX_DEPLOYMENT_TARGET = "$(RECOMMENDED_MACOSX_DEPLOYMENT_TARGET)";
 				MARKETING_VERSION = 2.3.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.jhchoo.AndroidFileSync;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -436,6 +444,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 3;
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = W33H96C7PY;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -444,16 +453,17 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = /opt/homebrew/include;
 				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
 					/opt/homebrew/lib,
-					/opt/homebrew/Cellar/libmtp/1.1.22/lib,
-					/opt/homebrew/Cellar/libusb/1.0.29/lib,
 				);
+				MACOSX_DEPLOYMENT_TARGET = "$(RECOMMENDED_MACOSX_DEPLOYMENT_TARGET)";
 				MARKETING_VERSION = 2.3.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.jhchoo.AndroidFileSync;
 				PRODUCT_NAME = "$(TARGET_NAME)";

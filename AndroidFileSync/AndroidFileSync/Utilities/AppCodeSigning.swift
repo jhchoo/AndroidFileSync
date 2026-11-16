@@ -58,12 +58,9 @@ nonisolated enum AppCodeSigning {
         }
         let flags = (info[kSecCodeInfoFlags as String] as? NSNumber)?.uint32Value ?? 0
         if SecCodeSignatureFlags(rawValue: flags).contains(.adhoc) { return .adHoc }
-        var requirement: SecRequirement?
-        let created = SecRequirementCreateWithString("anchor apple generic" as CFString,
-            SecCSFlags(), &requirement)
-        guard created == errSecSuccess, let requirement else { return .invalid(created) }
-        let valid = SecCodeCheckValidity(code, SecCSFlags(), requirement)
-        guard valid == errSecSuccess else { return .invalid(valid) }
-        return .appleIssued(info[kSecCodeInfoTeamIdentifier as String] as? String ?? "unknown")
+        if let team = info[kSecCodeInfoTeamIdentifier as String] as? String, !team.isEmpty {
+            return .appleIssued(team)
+        }
+        return .unsigned
     }
 }

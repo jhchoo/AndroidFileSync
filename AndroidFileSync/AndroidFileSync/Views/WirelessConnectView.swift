@@ -172,7 +172,7 @@ class ADBPairingBrowser: ObservableObject {
                                 guard !Task.isCancelled else { return }
                                 // Don't remove devices while pairing is active — mDNS services
                                 // briefly disappear during TLS key rotation.
-                                if await ADBPairingBrowser.isPairingActive { return }
+                                if ADBPairingBrowser.isPairingActive { return }
                                 
                                 await MainActor.run {
                                     guard let self = self else { return }
@@ -318,7 +318,7 @@ class ADBPairingBrowser: ObservableObject {
             // mdnsServicesWithRecovery() can trigger an ADB server restart, which kills
             // the TLS connection and causes:
             //   "protocol fault (couldn't read status message): Undefined error: 0"
-            let pairingActive = await ADBPairingBrowser.isPairingActive
+            let pairingActive = ADBPairingBrowser.isPairingActive
             guard !pairingActive else {
                 AppLogger.log("📶 [NWBrowser] Skipping mDNS poll — pairing is in progress.")
                 return
@@ -595,7 +595,7 @@ struct WirelessConnectView: View {
             .padding(.horizontal, 24)
             .padding(.top, 16)
             .padding(.bottom, 8)
-            .onChange(of: selectedTab) { _ in
+            .onChange(of: selectedTab) {
                 // Stop browsing when switching away from each tab
                 pairingBrowser.stopBrowsing()
                 pairingBrowser.status = .idle
@@ -636,7 +636,7 @@ struct WirelessConnectView: View {
                 showSetupPopup = true
             }
         }
-        .onChange(of: deviceManager.availableDevices) { _ in
+        .onChange(of: deviceManager.availableDevices) {
             // When a device connects and WiFi devices are already visible, keep
             // the discovered list expanded so it doesn't disappear from view.
             if deviceManager.isConnected && !pairingBrowser.discoveredDevices.isEmpty {
@@ -899,7 +899,6 @@ struct WirelessConnectView: View {
                     )
                     .frame(width: 72, height: 72)
                 ProgressView()
-                    .scaleEffect(1.2)
                     .tint(.blue)
             }
             VStack(spacing: 5) {
@@ -1059,7 +1058,6 @@ struct WirelessConnectView: View {
     // MARK: - Auto-Discovery Tab
 
     private var autoDiscoveryTab: some View {
-        let wirelessDeviceAvailable = deviceManager.availableDevices.contains(where: { $0.isWireless })
         // Show the connected banner whenever any device is connected (USB or wireless).
         // The banner itself handles both cases and shows the appropriate switch options.
         let alreadyConnected = deviceManager.isConnected
@@ -1086,7 +1084,7 @@ struct WirelessConnectView: View {
                             }) {
                                 HStack(spacing: 8) {
                                     if isSearching {
-                                        ProgressView().scaleEffect(0.7)
+                                        ProgressView().controlSize(.small)
                                     } else {
                                         Image(systemName: "wifi.circle")
                                             .foregroundColor(.blue)
@@ -1195,7 +1193,6 @@ struct WirelessConnectView: View {
                             // ── Searching state ──
                             VStack(spacing: 14) {
                                 ProgressView()
-                                    .scaleEffect(1.3)
                                     .padding(.top, 8)
                                 Text("wireless_status_scanning_devices_network")
                                     .font(.headline)
@@ -1332,7 +1329,7 @@ struct WirelessConnectView: View {
                 visiblePairingPort = String(port)
             }
         }
-        .onChange(of: pairingBrowser.discoveredDevices) { devices in
+        .onChange(of: pairingBrowser.discoveredDevices) { _, devices in
             if selectedDeviceIP.isEmpty, let first = devices.keys.first {
                 selectedDeviceIP = first
             } else if !selectedDeviceIP.isEmpty, devices[selectedDeviceIP] == nil,
@@ -1584,7 +1581,7 @@ struct WirelessConnectView: View {
                     visiblePairingPort = String(port)
                 }
             }
-            .onChange(of: pairingBrowser.discoveredDevices[activeKey]?.pairingPort) { newPort in
+            .onChange(of: pairingBrowser.discoveredDevices[activeKey]?.pairingPort) { _, newPort in
                 if let port = newPort {
                     visiblePairingPort = String(port)
                 } else {
@@ -1601,9 +1598,6 @@ struct WirelessConnectView: View {
     private var connectedBanner: some View {
         let isWirelessActive = deviceManager.connectionType == .wireless
         let isUSBActive      = deviceManager.connectionType == .usb
-        let wirelessDevices  = deviceManager.availableDevices.filter { $0.isWireless }
-
-        let usbDevices = deviceManager.availableDevices.filter { !$0.isWireless }
 
         VStack(spacing: 16) {
 
@@ -1891,8 +1885,7 @@ struct WirelessConnectView: View {
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.green.opacity(0.1)))
             case .pairing:
                 HStack(spacing: 8) {
-                    ProgressView()
-                        .scaleEffect(0.7)
+                    ProgressView().controlSize(.small)
                     Text("wireless_status_pairing_device_dots")
                         .font(.subheadline)
                 }
@@ -2308,8 +2301,7 @@ struct WirelessConnectView: View {
     private var statusBanner: some View {
         HStack(spacing: 8) {
             if isPairing {
-                ProgressView()
-                    .scaleEffect(0.7)
+                ProgressView().controlSize(.small)
             } else {
                 Image(systemName: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                     .foregroundColor(isError ? .orange : .green)
@@ -2352,8 +2344,7 @@ struct WirelessConnectView: View {
             Button(action: performManualConnection) {
                 HStack(spacing: 6) {
                     if isPairing {
-                        ProgressView()
-                            .scaleEffect(0.6)
+                        ProgressView().controlSize(.small)
                     } else {
                         Image(systemName: "wifi")
                     }

@@ -184,7 +184,7 @@ struct AppBrowserView: View {
             // ── Loading state — full-page spinner ────────────────────────────
             Spacer()
             VStack(spacing: 12) {
-                ProgressView().scaleEffect(1.2)
+                ProgressView()
                 Text(appManager.statusMessage)
                     .font(.system(size: 13))
                     .foregroundColor(.secondary)
@@ -521,9 +521,7 @@ struct AppRowView: View {
             Spacer()
 
             if appManager.operationEngine.isPackageBusy(app.packageName) {
-                ProgressView()
-                    .controlSize(.small)
-                    .scaleEffect(0.7)
+                ProgressView().controlSize(.small)
             }
         }
         .contextMenu {

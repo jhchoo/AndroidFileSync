@@ -89,7 +89,7 @@ final class FileDragManager: NSObject, ObservableObject, NSDraggingSource {
     @Published private(set) var isDragging: Bool = false
     weak var downloadManager: DownloadManager?
 
-    private static let promiseOperationQueue: OperationQueue = {
+    private nonisolated static let promiseOperationQueue: OperationQueue = {
         let queue = OperationQueue()
         queue.name = "com.androidfilesync.dragdrop.promises"
         queue.maxConcurrentOperationCount = 4

@@ -2381,7 +2381,7 @@ class ADBManager {
             let escapedPath = path.replacingOccurrences(of: "'", with: "'\\''")
             let command = "cd '\(escapedPath)' && stat -c '%A|%s|%Y|%n' \(escapedArgs) 2>/dev/null"
             
-            let (code, output, _) = await Shell.runAsyncWithTimeout(
+            let (_, output, _) = await Shell.runAsyncWithTimeout(
                 adbPath, args: deviceArgs(["shell", command]), timeoutSeconds: 15.0
             )
             
@@ -2498,8 +2498,9 @@ class ADBManager {
                 
                 await withTaskGroup(of: Void.self) { group in
                     // Task 1: Run the download
+                    let pullArgs = deviceArgs(["pull", "-a", cleanDevicePath, localPath])
                     group.addTask {
-                        let (code, _, err) = await Shell.runAsync(adbPath, args: deviceArgs(["pull", "-a", cleanDevicePath, localPath]))
+                        let (code, _, err) = await Shell.runAsync(adbPath, args: pullArgs)
                         exitCode = code
                         adbError = err
                     }
@@ -2577,10 +2578,11 @@ class ADBManager {
                 
                 await withTaskGroup(of: Void.self) { group in
                     // Task 1: Main upload task via Shell.runAsync (uses posix_spawn -> exact UTF-8 byte sequences preserved without macOS Process NFD normalization)
+                    let pushArgs = deviceArgs(["push", nfcLocalPath, nfcDevicePath])
                     group.addTask {
                         let (code, out, err) = await Shell.runAsync(
                             adbPath,
-                            args: deviceArgs(["push", nfcLocalPath, nfcDevicePath])
+                            args: pushArgs
                         )
                         exitCode = code
                         adbOutput = out
@@ -2599,11 +2601,12 @@ class ADBManager {
                     
                     // Task 3: Progress polling for files >= 10MB
                     if totalBytes >= 10 * 1024 * 1024 {
+                        let escapedPath = FileNameHelper.escapeForShell(nfcDevicePath)
+                        let statArgs = deviceArgs(["shell", "stat", "-c%s", escapedPath])
                         group.addTask {
                             // Wait a moment for transfer to start
                             try? await Task.sleep(nanoseconds: 800_000_000)
                             
-                            let escapedPath = FileNameHelper.escapeForShell(nfcDevicePath)
                             var lastSize: UInt64 = 0
                             var lastCheck = Date()
                             var consecutiveFailures = 0
@@ -2611,7 +2614,7 @@ class ADBManager {
                             while !Task.isCancelled && !cancellationCheck() {
                                 let (statCode, statOutput, _) = Shell.run(
                                     adbPath,
-                                    args: deviceArgs(["shell", "stat", "-c%s", escapedPath])
+                                    args: statArgs
                                 )
                                 
                                 if statCode == 0, let currentSize = UInt64(statOutput.trimmingCharacters(in: .whitespacesAndNewlines)) {
@@ -2838,7 +2841,7 @@ class ADBManager {
         
         // Strategy 1: Use rm -rf with single-quoted path (handles most cases)
         let command = "rm -rf '\(escapedPath)'"
-        let (code, _, error, _) = await Shell.runWithProgressCancellable(
+        _ = await Shell.runWithProgressCancellable(
             adbPath,
             args: deviceArgs(["shell", command]),
             progressCallback: { _ in },
@@ -2870,7 +2873,7 @@ class ADBManager {
         // Strategy 2: Pass rm and path as separate arguments (avoids shell re-parsing)
         // This handles filenames with spaces, dots, and special characters better
         print("⚠️ Delete: File still exists after rm -rf, retrying with separate args...")
-        let (code2, _, error2, _) = await Shell.runWithProgressCancellable(
+        _ = await Shell.runWithProgressCancellable(
             adbPath,
             args: deviceArgs(["shell", "rm", "-rf", devicePath]),
             progressCallback: { _ in },

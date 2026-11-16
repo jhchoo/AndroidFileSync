@@ -731,11 +731,11 @@ struct SidebarView: View {
                 Text("경로가 존재하지 않습니다.\n삭제하시겠습니까?")
             }
         }
-        .onChange(of: currentPath) { newValue in
+        .onChange(of: currentPath) { _, newValue in
             SidebarDragState.shared.currentPath = newValue
             SidebarDragState.shared.onSelectFolder = selectFolder
         }
-        .onChange(of: activeAppFilter != nil) { newValue in
+        .onChange(of: activeAppFilter != nil) { _, newValue in
             SidebarDragState.shared.hasActiveAppFilter = newValue
             SidebarDragState.shared.onSelectFolder = selectFolder
         }
@@ -842,7 +842,7 @@ struct SidebarItemRowContainer: View {
             GeometryReader { geo in
                 Color.clear
                     .onAppear { rowHeight = geo.size.height }
-                    .onChange(of: geo.size.height) { newH in rowHeight = newH }
+                    .onChange(of: geo.size.height) { _, newH in rowHeight = newH }
             }
         )
         .overlay(alignment: .top) {
@@ -1356,8 +1356,7 @@ struct QuickAccessRow: View {
 
                 if isChecking {
                     ProgressView()
-                        .scaleEffect(0.55)
-                        .frame(width: 14, height: 14)
+                        .controlSize(.small)
                 }
             }
 

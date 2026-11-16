@@ -2,7 +2,7 @@ import Foundation
 
 struct FileNameHelper {
     // Escape shell-sensitive characters in filenames
-    static func escapeForShell(_ filename: String) -> String {
+    nonisolated static func escapeForShell(_ filename: String) -> String {
         // Characters that need escaping in shell commands
         let specialChars = CharacterSet(charactersIn: "\\\"'`$!&*()[]{};<>|?~ \t\n")
         
@@ -20,14 +20,14 @@ struct FileNameHelper {
     /// Escapes a string for safe use inside single quotes in a shell command.
     ///
     /// Inside single quotes, the ONLY character that needs special handling is `'` itself.
-    /// The idiom `'\''` ends the current quote, inserts a literal `'`, and reopens the quote.
+    /// The idiom `'\\''` ends the current quote, inserts a literal `'`, and reopens the quote.
     /// International/Unicode characters pass through safely — single quotes preserve them as-is.
-    static func escapeForSingleQuotedShell(_ value: String) -> String {
+    nonisolated static func escapeForSingleQuotedShell(_ value: String) -> String {
         return value.replacingOccurrences(of: "'", with: "'\\''")
     }
     
     // Sanitize filename by replacing problematic characters
-    static func sanitizeFilename(_ filename: String, replacement: String = "_") -> String {
+    nonisolated static func sanitizeFilename(_ filename: String, replacement: String = "_") -> String {
         // Replace characters that cause issues on Android
         let problematicChars = CharacterSet(charactersIn: "<>:\"|?*\\")
         
@@ -48,7 +48,7 @@ struct FileNameHelper {
     }
     
     // Get safe version with original extension preserved and normalized to Unicode NFC (Android standard)
-    static func getSafeFilename(_ filename: String) -> (safe: String, wasModified: Bool) {
+    nonisolated static func getSafeFilename(_ filename: String) -> (safe: String, wasModified: Bool) {
         let sanitized = sanitizeFilename(filename)
         let nfc = sanitized.precomposedStringWithCanonicalMapping
         return (nfc, nfc != filename)
@@ -57,13 +57,13 @@ struct FileNameHelper {
     // MARK: - ADB Shell Output Sanitization
 
     // Regular expression for stripping ANSI escape sequences (colors, cursor movements, etc.)
-    private static let ansiRegex = try? NSRegularExpression(
-        pattern: #"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])"#,
+    private nonisolated static let ansiRegex = try? NSRegularExpression(
+        pattern: #"\\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])"#,
         options: []
     )
 
     /// Strips ANSI terminal escape codes, carriage returns, and control characters from ADB shell output.
-    static func stripANSI(_ text: String) -> String {
+    nonisolated static func stripANSI(_ text: String) -> String {
         guard let regex = ansiRegex else {
             return text.replacingOccurrences(of: "\r", with: "")
         }
@@ -77,7 +77,7 @@ struct FileNameHelper {
     /// - Removes \r and non-printable control characters
     /// - Preserves exact Unicode byte sequence as stored on the remote device (preserves NFC or NFD)
     /// - Trims leading/trailing whitespace
-    static func cleanFileName(_ name: String) -> String {
+    nonisolated static func cleanFileName(_ name: String) -> String {
         let stripped = stripANSI(name)
         let controlChars = CharacterSet.controlCharacters
         let filtered = stripped.unicodeScalars.filter { scalar in
@@ -90,7 +90,7 @@ struct FileNameHelper {
     /// - Cleans ANSI escapes and control characters
     /// - Ensures a leading slash "/"
     /// - Preserves exact Unicode byte sequence as stored on the remote device (preserves NFC or NFD)
-    static func cleanRemotePath(_ path: String) -> String {
+    nonisolated static func cleanRemotePath(_ path: String) -> String {
         let stripped = stripANSI(path)
         let controlChars = CharacterSet.controlCharacters
         let filtered = stripped.unicodeScalars.filter { scalar in
@@ -106,14 +106,13 @@ struct FileNameHelper {
 
 extension String {
     /// Returns the localized string for the specified key from the main bundle string catalog.
-    static func localized(_ key: String) -> String {
+    nonisolated static func localized(_ key: String) -> String {
         NSLocalizedString(key, comment: "")
     }
 
     /// Returns a formatted localized string for the specified key and arguments.
-    static func localized(_ key: String, _ arguments: CVarArg...) -> String {
+    nonisolated static func localized(_ key: String, _ arguments: CVarArg...) -> String {
         let format = NSLocalizedString(key, comment: "")
         return String(format: format, arguments: arguments)
     }
 }
-

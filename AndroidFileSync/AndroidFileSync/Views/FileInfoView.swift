@@ -46,7 +46,7 @@ struct FileInfoView: View {
                     if isLoading {
                         HStack {
                             ProgressView()
-                                .scaleEffect(0.7)
+                                .controlSize(.small)
                             Text("common_loading_info")
                                 .font(.system(size: 12))
                                 .foregroundColor(.secondary)

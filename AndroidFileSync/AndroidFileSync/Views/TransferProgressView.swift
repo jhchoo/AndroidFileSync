@@ -113,7 +113,7 @@ struct TransferProgressView: View {
             NonDraggableBackground()
                 .background(Color(NSColor.controlBackgroundColor))
         )
-        .onChange(of: items.count) { _ in
+        .onChange(of: items.count) {
             let hasDownloads = items.contains { !$0.isUpload }
             let hasUploads = items.contains { $0.isUpload }
             

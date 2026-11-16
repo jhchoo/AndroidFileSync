@@ -8,7 +8,7 @@ import Foundation
 /// Module-wide print gate for release builds. Keeps existing `print(...)` call sites
 /// but silences them unless diagnostics is explicitly enabled.
 @inline(__always)
-func print(_ items: Any..., separator: String = " ", terminator: String = "\n") {
+nonisolated func print(_ items: Any..., separator: String = " ", terminator: String = "\n") {
     guard DiagnosticsControl.isEnabled else { return }
     let message = items.map { String(describing: $0) }.joined(separator: separator)
     Swift.print(message, terminator: terminator)
@@ -16,9 +16,9 @@ func print(_ items: Any..., separator: String = " ", terminator: String = "\n") 
 
 final class DiagnosticsControl: ObservableObject {
     static let shared = DiagnosticsControl()
-    static let userDefaultsKey = "diagnosticsControlEnabled"
+    nonisolated static let userDefaultsKey = "diagnosticsControlEnabled"
 
-    static var isEnabled: Bool {
+    nonisolated static var isEnabled: Bool {
         UserDefaults.standard.object(forKey: userDefaultsKey) as? Bool ?? false
     }
 
@@ -34,21 +34,21 @@ final class DiagnosticsControl: ObservableObject {
 }
 
 class AppLogger {
-    private static let logQueue = DispatchQueue(label: "com.santosh.AndroidFileSync.logQueue")
-    private static var cachedLogFileURL: URL?
+    private nonisolated static let logQueue = DispatchQueue(label: "com.santosh.AndroidFileSync.logQueue")
+    private nonisolated(unsafe) static var cachedLogFileURL: URL?
 
-    private static let timestampFormatter: DateFormatter = {
+    private nonisolated static let timestampFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
         formatter.locale = Locale(identifier: "en_US_POSIX")
         return formatter
     }()
 
-    static var isEnabled: Bool {
+    nonisolated static var isEnabled: Bool {
         DiagnosticsControl.isEnabled
     }
 
-    static var logFileURL: URL? {
+    nonisolated static var logFileURL: URL? {
         guard isEnabled else { return nil }
         if let cachedLogFileURL { return cachedLogFileURL }
 
@@ -70,7 +70,7 @@ class AppLogger {
     }
 
     /// Adds a session separator to the log file and rotates if needed.
-    static func addSessionSeparator() {
+    nonisolated static func addSessionSeparator() {
         guard isEnabled else { return }
         logQueue.async {
             guard let url = logFileURL else { return }
@@ -105,7 +105,7 @@ class AppLogger {
         }
     }
 
-    static func log(_ message: @autoclosure () -> String, level: LogLevel = .info) {
+    nonisolated static func log(_ message: @autoclosure () -> String, level: LogLevel = .info) {
         guard isEnabled else { return }
 
         let prefix: String

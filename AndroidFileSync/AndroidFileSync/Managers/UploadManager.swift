@@ -7,6 +7,226 @@
 import Foundation
 internal import Combine
 
+
+// MARK: - Thread-Safe Concurrency & Progress Store
+
+nonisolated final class UploadSyncState: @unchecked Sendable {
+    // Queue
+    private let queueLock = NSLock()
+    private var pendingFiles: [UploadManager.UploadQueueItem] = []
+    private var isProcessingQueue: Bool = false
+    
+    // Running counters
+    private let activeRunningLock = NSLock()
+    private var activeRunningCount: Int = 0
+    private var activeRunningWeight: Double = 0.0
+    
+    // Cancellation
+    private let flagLock = NSLock()
+    private var cancellationFlags: [String: Bool] = [:]
+    
+    // Progress & Ensured directories
+    private let progressLock = NSLock()
+    private var backgroundProgress: [String: (bytes: UInt64, speed: Double)] = [:]
+    private var ensuredDirectories = Set<String>()
+    private var internalBatchCompleted: Int = 0
+    
+    // Timestamps
+    private let timestampLock = NSLock()
+    private var uploadedTimestamps: [(devicePath: String, date: Date)] = []
+    
+    // MARK: - Queue Methods
+    func getPendingCount() -> Int {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        return pendingFiles.count
+    }
+    
+    func appendPendingFiles(_ files: [UploadManager.UploadQueueItem]) -> Bool {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        pendingFiles.append(contentsOf: files)
+        let shouldStart = !isProcessingQueue
+        if shouldStart { isProcessingQueue = true }
+        return shouldStart
+    }
+    
+    func popPendingFile() -> UploadManager.UploadQueueItem? {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        return pendingFiles.isEmpty ? nil : pendingFiles.removeFirst()
+    }
+    
+    func prependPendingFile(_ file: UploadManager.UploadQueueItem) {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        pendingFiles.insert(file, at: 0)
+    }
+    
+    func hasPendingFiles() -> Bool {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        return !pendingFiles.isEmpty
+    }
+    
+    func removeAllPendingFiles() {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        pendingFiles.removeAll()
+    }
+    
+    func startProcessingQueueIfPending() -> Bool {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        let shouldStart = !isProcessingQueue && !pendingFiles.isEmpty
+        if shouldStart { isProcessingQueue = true }
+        return shouldStart
+    }
+    
+    func setProcessingQueue(_ processing: Bool) {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        isProcessingQueue = processing
+    }
+    
+    // MARK: - Running Counters
+    func getRunningCount() -> Int {
+        activeRunningLock.lock()
+        defer { activeRunningLock.unlock() }
+        return activeRunningCount
+    }
+    
+    func getRunningWeight() -> Double {
+        activeRunningLock.lock()
+        defer { activeRunningLock.unlock() }
+        return activeRunningWeight
+    }
+    
+    func incrementRunning(weight: Double) -> Int {
+        activeRunningLock.lock()
+        defer { activeRunningLock.unlock() }
+        activeRunningCount += 1
+        activeRunningWeight += weight
+        return activeRunningCount
+    }
+    
+    func decrementRunning(weight: Double) {
+        activeRunningLock.lock()
+        defer { activeRunningLock.unlock() }
+        activeRunningCount -= 1
+        activeRunningWeight = max(0.0, activeRunningWeight - weight)
+    }
+    
+    // MARK: - Cancellation Flags
+    func isCancelled(localPath: String) -> Bool {
+        flagLock.lock()
+        defer { flagLock.unlock() }
+        return cancellationFlags[localPath] ?? false
+    }
+    
+    func setCancelled(localPath: String, value: Bool) {
+        flagLock.lock()
+        defer { flagLock.unlock() }
+        cancellationFlags[localPath] = value
+    }
+    
+    func removeCancellation(localPath: String) {
+        flagLock.lock()
+        defer { flagLock.unlock() }
+        cancellationFlags.removeValue(forKey: localPath)
+    }
+    
+    func cancelAllFlags(keys: [String]) {
+        flagLock.lock()
+        defer { flagLock.unlock() }
+        for key in keys {
+            cancellationFlags[key] = true
+        }
+    }
+    
+    func removeAllFlags() {
+        flagLock.lock()
+        defer { flagLock.unlock() }
+        cancellationFlags.removeAll()
+    }
+    
+    // MARK: - Progress & Ensured Directories
+    func checkAndMarkEnsuredDirectory(_ nfcDir: String) -> Bool {
+        progressLock.lock()
+        defer { progressLock.unlock() }
+        let alreadyEnsured = ensuredDirectories.contains(nfcDir)
+        if !alreadyEnsured {
+            ensuredDirectories.insert(nfcDir)
+        }
+        return alreadyEnsured
+    }
+    
+    func clearEnsuredDirectories() {
+        progressLock.lock()
+        defer { progressLock.unlock() }
+        ensuredDirectories.removeAll()
+    }
+    
+    func updateProgress(key: String, bytes: UInt64, speed: Double) {
+        progressLock.lock()
+        defer { progressLock.unlock() }
+        backgroundProgress[key] = (bytes, speed)
+    }
+    
+    func removeProgress(key: String) {
+        progressLock.lock()
+        defer { progressLock.unlock() }
+        backgroundProgress.removeValue(forKey: key)
+    }
+    
+    func removeProgressKeys(_ keys: Set<String>) {
+        progressLock.lock()
+        defer { progressLock.unlock() }
+        for k in keys {
+            backgroundProgress.removeValue(forKey: k)
+        }
+    }
+    
+    func removeAllProgress() {
+        progressLock.lock()
+        defer { progressLock.unlock() }
+        backgroundProgress.removeAll()
+    }
+    
+    func resetBatchCompleted() {
+        progressLock.lock()
+        defer { progressLock.unlock() }
+        internalBatchCompleted = 0
+    }
+    
+    func incrementBatchCompleted() {
+        progressLock.lock()
+        defer { progressLock.unlock() }
+        internalBatchCompleted += 1
+    }
+    
+    func getProgressSnapshot() -> (updates: [String: (bytes: UInt64, speed: Double)], completed: Int) {
+        progressLock.lock()
+        defer { progressLock.unlock() }
+        return (backgroundProgress, internalBatchCompleted)
+    }
+    
+    // MARK: - Timestamps
+    func appendTimestamp(devicePath: String, date: Date) {
+        timestampLock.lock()
+        defer { timestampLock.unlock() }
+        uploadedTimestamps.append((devicePath: devicePath, date: date))
+    }
+    
+    func drainTimestamps() -> [(devicePath: String, date: Date)] {
+        timestampLock.lock()
+        defer { timestampLock.unlock() }
+        let ts = uploadedTimestamps
+        uploadedTimestamps.removeAll()
+        return ts
+    }
+}
+
 class UploadManager: ObservableObject {
     @Published var activeUploads: [String: UploadProgress] = [:] {
         didSet {
@@ -100,32 +320,19 @@ class UploadManager: ObservableObject {
     
     @Published var effectiveConcurrentLimit: Int = 3
     
-    private let progressLock = NSLock()
-    private var backgroundProgress: [String: (bytes: UInt64, speed: Double)] = [:]
-    private var ensuredDirectories = Set<String>()
+    private nonisolated let syncState = UploadSyncState()
     
     private func ensureDestinationDirectory(_ dir: String) async {
         let nfcDir = dir.precomposedStringWithCanonicalMapping
-        progressLock.lock()
-        let alreadyEnsured = ensuredDirectories.contains(nfcDir)
-        if !alreadyEnsured {
-            ensuredDirectories.insert(nfcDir)
-        }
-        progressLock.unlock()
-        
+        let alreadyEnsured = syncState.checkAndMarkEnsuredDirectory(nfcDir)
         if !alreadyEnsured {
             try? await ADBManager.createFolder(at: nfcDir)
         }
     }
     
     func clearEnsuredDirectories() {
-        progressLock.lock()
-        ensuredDirectories.removeAll()
-        progressLock.unlock()
+        syncState.clearEnsuredDirectories()
     }
-    
-    private var cancellationFlags: [String: Bool] = [:]
-    private let flagLock = NSLock()
     
     private var updateTimer: Timer?
     
@@ -141,44 +348,22 @@ struct UploadQueueItem {
 }
 
     // Shared upload queue — new drops append here instead of starting a separate batch
-    private let queueLock = NSLock()
-    private var pendingFiles: [UploadQueueItem] = []
-    private var isProcessingQueue = false
     private var activeCongestionCap: Int = 12
     private var successStreak: Int = 0
-    
-    // Throttled batch counter — updated in background, flushed to @Published by timer
-    private var internalBatchCompleted: Int = 0
     
     // Coalesced removals to avoid per-file @Published updates during batch mode
     private var pendingRemovals: Set<String> = []
     
-    // Timestamp pairs collected during batch uploads — flushed as batched `touch -t` after completion.
-    // Stored as (devicePath, macModificationDate) so we can restore the original mtime on Android.
-    private var uploadedTimestamps: [(devicePath: String, date: Date)] = []
-    private let timestampLock = NSLock()
-    
-    // Active running tasks counter for queue processor
-    private let activeRunningLock = NSLock()
-    private var activeRunningCount: Int = 0
-    private var activeRunningWeight: Double = 0.0
-    
     var pendingQueueCount: Int {
-        queueLock.lock()
-        defer { queueLock.unlock() }
-        return pendingFiles.count
+        syncState.getPendingCount()
     }
     
     var runningTransfersCount: Int {
-        activeRunningLock.lock()
-        defer { activeRunningLock.unlock() }
-        return activeRunningCount
+        syncState.getRunningCount()
     }
     
     var runningTransfersWeight: Double {
-        activeRunningLock.lock()
-        defer { activeRunningLock.unlock() }
-        return activeRunningWeight
+        syncState.getRunningWeight()
     }
     
     /// Calculates dynamic slot weight based on file size
@@ -284,10 +469,7 @@ struct UploadQueueItem {
     }
     
     private func flushUIUpdates() {
-        progressLock.lock()
-        let updates = backgroundProgress
-        let completedSnapshot = internalBatchCompleted
-        progressLock.unlock()
+        let (updates, completedSnapshot) = syncState.getProgressSnapshot()
         
         for (localPath, (bytes, speed)) in updates {
             if var upload = internalActiveUploads[localPath] {
@@ -303,11 +485,7 @@ struct UploadQueueItem {
             for localPath in removals {
                 internalActiveUploads.removeValue(forKey: localPath)
             }
-            progressLock.lock()
-            for localPath in removals {
-                backgroundProgress.removeValue(forKey: localPath)
-            }
-            progressLock.unlock()
+            syncState.removeProgressKeys(removals)
         }
         
         // Single batch update to @Published property to minimize SwiftUI updates
@@ -382,9 +560,7 @@ struct UploadQueueItem {
                 activeUploads = internalActiveUploads
             }
         }
-        progressLock.lock()
-        backgroundProgress.removeValue(forKey: localPath)
-        progressLock.unlock()
+        syncState.removeProgress(key: localPath)
     }
     
     private func isConnectionError(_ error: Error) -> Bool {
@@ -400,15 +576,11 @@ struct UploadQueueItem {
     // MARK: - Cancellation
     
     private func isCancelled(localPath: String) -> Bool {
-        flagLock.lock()
-        defer { flagLock.unlock() }
-        return cancellationFlags[localPath] ?? false
+        syncState.isCancelled(localPath: localPath)
     }
     
     private func setCancelled(localPath: String, value: Bool) {
-        flagLock.lock()
-        cancellationFlags[localPath] = value
-        flagLock.unlock()
+        syncState.setCancelled(localPath: localPath, value: value)
     }
     
     func cancelUpload(localPath: String) {
@@ -427,13 +599,8 @@ struct UploadQueueItem {
             self.activeUploads = self.internalActiveUploads
             self.stopTimerIfNeeded()
             
-            self.progressLock.lock()
-            self.backgroundProgress.removeValue(forKey: localPath)
-            self.progressLock.unlock()
-            
-            self.flagLock.lock()
-            self.cancellationFlags.removeValue(forKey: localPath)
-            self.flagLock.unlock()
+            self.syncState.removeProgress(key: localPath)
+            self.syncState.removeCancellation(localPath: localPath)
         }
     }
     
@@ -443,18 +610,8 @@ struct UploadQueueItem {
         clearEnsuredDirectories()
         
         // Drain the pending queue so nothing else starts
-        queueLock.lock()
-        pendingFiles.removeAll()
-        queueLock.unlock()
-        
-        flagLock.lock()
-        for key in cancellationFlags.keys {
-            cancellationFlags[key] = true
-        }
-        for key in internalActiveUploads.keys {
-            cancellationFlags[key] = true
-        }
-        flagLock.unlock()
+        syncState.removeAllPendingFiles()
+        syncState.cancelAllFlags(keys: Array(internalActiveUploads.keys))
         
         for key in internalActiveUploads.keys {
             internalActiveUploads[key]?.isCancelled = true
@@ -469,14 +626,9 @@ struct UploadQueueItem {
             self.stopTimerIfNeeded()
             self.endPreventingSleep()
             
-            self.progressLock.lock()
-            self.backgroundProgress.removeAll()
-            self.internalBatchCompleted = 0
-            self.progressLock.unlock()
-            
-            self.flagLock.lock()
-            self.cancellationFlags.removeAll()
-            self.flagLock.unlock()
+            self.syncState.removeAllProgress()
+            self.syncState.resetBatchCompleted()
+            self.syncState.removeAllFlags()
             
             self.batchTotal = 0
             self.batchCompleted = 0
@@ -505,6 +657,7 @@ struct UploadQueueItem {
             safeDevicePath = normDeviceDir + "/" + nfcFileName
         }
         
+        // Initialize progress
         let progress = UploadProgress(
             fileName: nfcFileName,
             localPath: localPath,
@@ -533,33 +686,28 @@ struct UploadQueueItem {
             _ = await Shell.runAsync(adbPath, args: ADBManager.deviceArgs(["shell", "rm -f '\(escAlt)' 2>/dev/null || true"]))
         }
         
+        let sync = self.syncState
         let progressStream = ADBManager.pushFileWithProgress(
             localPath: localPath,
             devicePath: safeDevicePath,
             totalBytes: fileSize,
-            cancellationCheck: { [weak self] in
-                self?.isCancelled(localPath: localPath) ?? false
+            cancellationCheck: { [sync] in
+                sync.isCancelled(localPath: localPath)
             }
         )
         
         do {
             for try await (bytesTransferred, speed) in progressStream {
-                if isCancelled(localPath: localPath) { return }
-                
-                progressLock.lock()
-                backgroundProgress[localPath] = (bytesTransferred, speed)
-                progressLock.unlock()
+                if sync.isCancelled(localPath: localPath) { return }
+                sync.updateProgress(key: localPath, bytes: bytesTransferred, speed: speed)
             }
         } catch {
-            await markUploadFailed(localPath: localPath, error: error)
+            markUploadFailed(localPath: localPath, error: error)
             throw error
         }
         
-        if isCancelled(localPath: localPath) { return }
-        
-        progressLock.lock()
-        backgroundProgress.removeValue(forKey: localPath)
-        progressLock.unlock()
+        if sync.isCancelled(localPath: localPath) { return }
+        sync.removeProgress(key: localPath)
         
         AppLogger.log("✅ File uploaded successfully: \(fileName) (\(fileSize) bytes)")
         
@@ -569,9 +717,7 @@ struct UploadQueueItem {
         if let attrs = try? FileManager.default.attributesOfItem(atPath: localPath),
            let modDate = attrs[.modificationDate] as? Date {
             if isBatchUploading {
-                timestampLock.lock()
-                uploadedTimestamps.append((devicePath: safeDevicePath, date: modDate))
-                timestampLock.unlock()
+                sync.appendTimestamp(devicePath: safeDevicePath, date: modDate)
             } else {
                 // Single-file upload — apply immediately before media scan
                 await ADBManager.setRemoteTimestamps([(devicePath: safeDevicePath, date: modDate)])
@@ -591,32 +737,24 @@ struct UploadQueueItem {
         }
         
         let batchUploading = isBatchUploading
+        let delayNs: UInt64 = batchUploading ? 300_000_000 : 1_000_000_000
         
-        Task.detached { [weak self] in
-            
-            let delayNs: UInt64 = batchUploading ? 300_000_000 : 1_000_000_000
+        Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: delayNs)
-            
-            await MainActor.run {
-                guard let self = self else { return }
-                if self.isBatchUploading {
-                    self.pendingRemovals.insert(localPath)
-                } else {
-                    self.internalActiveUploads.removeValue(forKey: localPath)
-                    self.activeUploads = self.internalActiveUploads
-                    self.stopTimerIfNeeded()
-                }
+            guard let self = self else { return }
+            if self.isBatchUploading {
+                self.pendingRemovals.insert(localPath)
+            } else {
+                self.internalActiveUploads.removeValue(forKey: localPath)
+                self.activeUploads = self.internalActiveUploads
+                self.stopTimerIfNeeded()
             }
             
-            self?.flagLock.lock()
-            self?.cancellationFlags.removeValue(forKey: localPath)
-            self?.flagLock.unlock()
+            self.syncState.removeCancellation(localPath: localPath)
             
-            let shouldEndSleep = await MainActor.run {
-                !(self?.isBatchUploading ?? false) && (self?.activeUploads.isEmpty ?? true)
-            }
+            let shouldEndSleep = !self.isBatchUploading && self.activeUploads.isEmpty
             if shouldEndSleep {
-                self?.endPreventingSleep()
+                self.endPreventingSleep()
             }
         }
     }
@@ -657,38 +795,35 @@ struct UploadQueueItem {
         }
         
         setCancelled(localPath: localPath, value: false)
+        let sync = self.syncState
         
-        let uploadTask = Task.detached { [weak self] in
+        let progressStream = ADBManager.pushFileWithProgress(
+            localPath: localPath,
+            devicePath: safeDevicePath,
+            totalBytes: fileSize,
+            cancellationCheck: { [sync] in
+                sync.isCancelled(localPath: localPath)
+            }
+        )
+        
+        let uploadTask = Task.detached { [weak self, sync, progressStream] in
             guard let self = self else { return }
             await self.ensureDestinationDirectory(normDeviceDir)
             
-            let progressStream = ADBManager.pushFileWithProgress(
-                localPath: localPath,
-                devicePath: safeDevicePath,
-                totalBytes: fileSize,
-                cancellationCheck: { [weak self] in
-                    self?.isCancelled(localPath: localPath) ?? false
-                }
-            )
-            
             do {
                 for try await (bytesTransferred, speed) in progressStream {
-                    if self.isCancelled(localPath: localPath) { return }
-                    
-                    self.progressLock.lock()
-                    self.backgroundProgress[localPath] = (bytesTransferred, speed)
-                    self.progressLock.unlock()
+                    if sync.isCancelled(localPath: localPath) { return }
+                    sync.updateProgress(key: localPath, bytes: bytesTransferred, speed: speed)
                 }
             } catch {
-                await self.markUploadFailed(localPath: localPath, error: error)
+                await MainActor.run {
+                    self.markUploadFailed(localPath: localPath, error: error)
+                }
                 return
             }
             
-            if self.isCancelled(localPath: localPath) { return }
-            
-            self.progressLock.lock()
-            self.backgroundProgress.removeValue(forKey: localPath)
-            self.progressLock.unlock()
+            if sync.isCancelled(localPath: localPath) { return }
+            sync.removeProgress(key: localPath)
             
             await MainActor.run {
                 self.internalActiveUploads[localPath]?.isComplete = true
@@ -705,9 +840,7 @@ struct UploadQueueItem {
                let modDate = attrs[.modificationDate] as? Date {
                 let isBatch = await MainActor.run { self.isBatchUploading }
                 if isBatch {
-                    self.timestampLock.lock()
-                    self.uploadedTimestamps.append((devicePath: safeDevicePath, date: modDate))
-                    self.timestampLock.unlock()
+                    sync.appendTimestamp(devicePath: safeDevicePath, date: modDate)
                 } else {
                     await ADBManager.setRemoteTimestamps([(devicePath: safeDevicePath, date: modDate)])
                 }
@@ -727,18 +860,14 @@ struct UploadQueueItem {
                     self.activeUploads = self.internalActiveUploads
                     self.stopTimerIfNeeded()
                 }
+                
+                let shouldEndSleep = !self.isBatchUploading && self.activeUploads.isEmpty
+                if shouldEndSleep {
+                    self.endPreventingSleep()
+                }
             }
             
-            self.flagLock.lock()
-            self.cancellationFlags.removeValue(forKey: localPath)
-            self.flagLock.unlock()
-            
-            let shouldEndSleep = await MainActor.run {
-                !self.isBatchUploading && self.activeUploads.isEmpty
-            }
-            if shouldEndSleep {
-                self.endPreventingSleep()
-            }
+            sync.removeCancellation(localPath: localPath)
         }
         
         return uploadTask
@@ -751,24 +880,19 @@ struct UploadQueueItem {
     ) {
         guard !files.isEmpty else { return }
         
-        queueLock.lock()
         let items = files.map { UploadQueueItem(localPath: $0.localPath, fileName: $0.fileName, fileSize: $0.fileSize, devicePath: $0.devicePath) }
-        pendingFiles.append(contentsOf: items)
-        let shouldStart = !isProcessingQueue
-        if shouldStart { isProcessingQueue = true }
-        queueLock.unlock()
+        let count = items.count
+        let shouldStart = syncState.appendPendingFiles(items)
         
         Task { @MainActor in
             self.targetDeviceSerial = ADBManager.activeDeviceSerial
             if self.isBatchUploading {
-                self.batchTotal += files.count
+                self.batchTotal += count
             } else {
                 self.currentBatchId = UUID()
-                self.batchTotal = files.count
+                self.batchTotal = count
                 
-                self.progressLock.lock()
-                self.internalBatchCompleted = 0
-                self.progressLock.unlock()
+                self.syncState.resetBatchCompleted()
                 self.batchCompleted = 0
                 
                 self.isBatchUploading = true
@@ -830,11 +954,7 @@ struct UploadQueueItem {
     }
     
     func triggerProcessQueue() {
-        queueLock.lock()
-        let shouldStart = !isProcessingQueue && !pendingFiles.isEmpty
-        if shouldStart { isProcessingQueue = true }
-        queueLock.unlock()
-        
+        let shouldStart = syncState.startProcessingQueueIfPending()
         if shouldStart {
             Task.detached(priority: .userInitiated) { [weak self] in
                 await self?.processQueue()
@@ -990,18 +1110,12 @@ struct UploadQueueItem {
                     }
                 }
                 
-                activeRunningLock.lock()
-                var running = activeRunningCount
-                activeRunningLock.unlock()
+                var running = syncState.getRunningCount()
                 
                 // Try to fill slots from the pending queue
                 var dispatchedThisRound = 0
                 while running < limit && !batchCancelled {
-                    queueLock.lock()
-                    let nextFile = pendingFiles.isEmpty ? nil : pendingFiles.removeFirst()
-                    queueLock.unlock()
-                    
-                    guard let file = nextFile else { break }
+                    guard let file = syncState.popPendingFile() else { break }
                     
                     let weight = slotWeight(for: file.fileSize)
                     
@@ -1010,14 +1124,10 @@ struct UploadQueueItem {
                     // overwhelming WiFi ADB transport. With this guard, only 2 large videos
                     // run concurrently (2×2.0=4.0 ≤ 4), while 8 small files can still burst (8×0.5=4.0).
                     if isWireless {
-                        activeRunningLock.lock()
-                        let currentWeight = activeRunningWeight
-                        activeRunningLock.unlock()
+                        let currentWeight = syncState.getRunningWeight()
                         if currentWeight + weight > Double(limit) && running > 0 {
                             // Would exceed weight budget — put file back and stop dispatching
-                            queueLock.lock()
-                            pendingFiles.insert(file, at: 0)
-                            queueLock.unlock()
+                            syncState.prependPendingFile(file)
                             break
                         }
                     }
@@ -1037,18 +1147,11 @@ struct UploadQueueItem {
                     
                     scannedFiles.insert(fullDevicePath)
                     
-                    activeRunningLock.lock()
-                    activeRunningCount += 1
-                    activeRunningWeight += weight
-                    running = activeRunningCount
-                    activeRunningLock.unlock()
+                    running = syncState.incrementRunning(weight: weight)
                     
                     group.addTask {
                         defer {
-                            self.activeRunningLock.lock()
-                            self.activeRunningCount -= 1
-                            self.activeRunningWeight = max(0.0, self.activeRunningWeight - weight)
-                            self.activeRunningLock.unlock()
+                            self.syncState.decrementRunning(weight: weight)
                         }
                         
                         var didSucceed = false
@@ -1078,6 +1181,7 @@ struct UploadQueueItem {
                             var updatedFile = file
                             updatedFile.retryCount += 1
                             let newRetryCount = updatedFile.retryCount
+                            let fileToReenqueue = updatedFile
                             
                             // AIMD Multiplicative Decrease: Cut congestion cap on error/stall
                             let aimdEnabled = await MainActor.run { self.isAutoConcurrency }
@@ -1117,9 +1221,7 @@ struct UploadQueueItem {
                                         self.activeCongestionCap = max(2, self.activeCongestionCap / 2)
                                         self.successStreak = 0
                                     }
-                                    self.queueLock.lock()
-                                    self.pendingFiles.insert(updatedFile, at: 0)
-                                    self.queueLock.unlock()
+                                    self.syncState.prependPendingFile(fileToReenqueue)
                                 }
                                 connErrorOccurred = true
                                 
@@ -1152,9 +1254,7 @@ struct UploadQueueItem {
                         let currentId = await MainActor.run { self.currentBatchId }
                         if didSucceed || isItemCanc || (!isBatchCanc && !connErrorOccurred) {
                             if currentId == batchId {
-                                self.progressLock.lock()
-                                self.internalBatchCompleted += 1
-                                self.progressLock.unlock()
+                                self.syncState.incrementBatchCompleted()
                             }
                         }
                     }
@@ -1166,13 +1266,8 @@ struct UploadQueueItem {
                 }
                 
                 // Check if there's more work pending or running
-                queueLock.lock()
-                let hasMore = !pendingFiles.isEmpty
-                queueLock.unlock()
-                
-                activeRunningLock.lock()
-                let finalRunning = activeRunningCount
-                activeRunningLock.unlock()
+                let hasMore = syncState.hasPendingFiles()
+                let finalRunning = syncState.getRunningCount()
                 
                 if finalRunning == 0 && !hasMore {
                     break
@@ -1193,10 +1288,7 @@ struct UploadQueueItem {
         // 1. Restore original timestamps on the Android device before media scanning.
         //    touch -t runs in chunks of 50 (~10 adb shell calls for 500 files vs 500 individual calls).
         //    Must complete before the media scan so MediaStore picks up the correct mtime.
-        timestampLock.lock()
-        let timestampsToApply = uploadedTimestamps
-        uploadedTimestamps.removeAll()
-        timestampLock.unlock()
+        let timestampsToApply = syncState.drainTimestamps()
         
         if !timestampsToApply.isEmpty {
             await ADBManager.setRemoteTimestamps(timestampsToApply)
@@ -1208,9 +1300,7 @@ struct UploadQueueItem {
             await ADBManager.triggerMediaScanForFiles(filesToScan)
         }
         
-        queueLock.lock()
-        isProcessingQueue = false
-        queueLock.unlock()
+        syncState.setProcessingQueue(false)
         
         await MainActor.run {
             self.internalActiveUploads.removeAll()
@@ -1219,9 +1309,8 @@ struct UploadQueueItem {
             self.isBatchUploading = false
             self.stopTimerIfNeeded()
             self.downloadManager?.forceReevaluateConcurrencyLimit()
+            self.endPreventingSleep()
         }
-        
-        endPreventingSleep()
         
         if batchCancelled {
             let completed = await MainActor.run { batchCompleted }

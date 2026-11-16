@@ -7,7 +7,7 @@
 //
 
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 internal import Combine
 
 /// Provides thumbnail images for files displayed in the file browser.
@@ -42,18 +42,23 @@ class ThumbnailProvider: ObservableObject {
     /// Progressive directory updates can otherwise leave later files without thumbnails.
     private var pendingRequest: (files: [UnifiedFile], path: String)?
     
+    private struct ThumbnailItem: @unchecked Sendable {
+        let path: String
+        let image: NSImage
+    }
+    
     /// Extensions we attempt to fetch image thumbnails for
-    private nonisolated(unsafe) static let imageExtensions: Set<String> = [
+    private nonisolated static let imageExtensions: Set<String> = [
         "jpg", "jpeg", "png", "gif", "heic", "webp", "bmp", "tiff"
     ]
     
     /// Extensions we attempt to fetch video thumbnails for
-    private nonisolated(unsafe) static let videoExtensions: Set<String> = [
+    private nonisolated static let videoExtensions: Set<String> = [
         "mp4", "mov", "avi", "mkv", "m4v", "webm"
     ]
     
     /// All thumbnailable extensions
-    private nonisolated(unsafe) static let thumbnailableExtensions: Set<String> =
+    private nonisolated static let thumbnailableExtensions: Set<String> =
         imageExtensions.union(videoExtensions)
     
     // MARK: - Media Type
@@ -201,12 +206,12 @@ class ThumbnailProvider: ObservableObject {
         adbPath: String,
         maxConcurrent: Int,
         deviceArgsPrefix: [String]
-    ) async -> [(String, NSImage)] {
+    ) async -> [ThumbnailItem] {
         // Split files by media type
         let imageFiles = files.filter { imageExtensions.contains($0.pathExtension) }
         let videoFiles = files.filter { videoExtensions.contains($0.pathExtension) }
         
-        var allResults: [(String, NSImage)] = []
+        var allResults: [ThumbnailItem] = []
 
         // Fetch image thumbnails
         if !imageFiles.isEmpty, !Task.isCancelled {
@@ -238,11 +243,11 @@ class ThumbnailProvider: ObservableObject {
     }
 
     /// Batch-store all thumbnails in a single update to minimize SwiftUI re-renders.
-    private func batchStoreThumbnails(_ results: [(String, NSImage)]) {
+    private func batchStoreThumbnails(_ results: [ThumbnailItem]) {
         guard !results.isEmpty else { return }
-        for (path, image) in results {
-            thumbnails[path] = image
-            touchLRU(path)
+        for item in results {
+            thumbnails[item.path] = item.image
+            touchLRU(item.path)
         }
         // Evict oldest entries if over limit
         while accessOrder.count > maxCacheSize {
@@ -261,7 +266,7 @@ class ThumbnailProvider: ObservableObject {
         maxConcurrent: Int,
         deviceArgsPrefix: [String],
         allowMediaScanRetry: Bool = true
-    ) async -> [(String, NSImage)] {
+    ) async -> [ThumbnailItem] {
         // Build name → file lookup
         var nameToFile: [String: UnifiedFile] = [:]
         for file in files {
@@ -343,9 +348,9 @@ class ThumbnailProvider: ObservableObject {
         print("🖼️ Thumbnails [\(mediaType.rawValue)]: Found \(entries.count) entries, fetching thumbnails...")
         
         // Fetch thumbnails concurrently — runs off the main thread since this is a static method
-        var results: [(String, NSImage)] = []
+        var results: [ThumbnailItem] = []
         
-        await withTaskGroup(of: (String, NSImage?)?.self) { group in
+        await withTaskGroup(of: ThumbnailItem?.self) { group in
             var activeTasks = 0
             var entryIndex = 0
             
@@ -357,13 +362,13 @@ class ThumbnailProvider: ObservableObject {
                 
                 group.addTask {
                     guard !Task.isCancelled else { return nil }
-                    let thumb = await Self.fetchSingleThumbnail(
+                    guard let thumb = await Self.fetchSingleThumbnail(
                         mediaId: entry.id,
                         contentUri: entry.thumbnailUri,
                         adbPath: adbPath,
                         deviceArgsPrefix: deviceArgsPrefix
-                    )
-                    return (entry.file.path, thumb)
+                    ) else { return nil }
+                    return ThumbnailItem(path: entry.file.path, image: thumb)
                 }
             }
             
@@ -372,8 +377,8 @@ class ThumbnailProvider: ObservableObject {
                 guard !Task.isCancelled else { break }
                 activeTasks -= 1
                 
-                if let (path, image) = result, let thumb = image {
-                    results.append((path, thumb))
+                if let item = result {
+                    results.append(item)
                 }
                 
                 // Enqueue next
@@ -384,13 +389,13 @@ class ThumbnailProvider: ObservableObject {
                     
                     group.addTask {
                         guard !Task.isCancelled else { return nil }
-                        let thumb = await Self.fetchSingleThumbnail(
+                        guard let thumb = await Self.fetchSingleThumbnail(
                             mediaId: entry.id,
                             contentUri: entry.thumbnailUri,
                             adbPath: adbPath,
                             deviceArgsPrefix: deviceArgsPrefix
-                        )
-                        return (entry.file.path, thumb)
+                        ) else { return nil }
+                        return ThumbnailItem(path: entry.file.path, image: thumb)
                     }
                 }
             }

@@ -69,7 +69,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             AppLogger.log("⚠️ Another instance of AndroidFileSync is already running. Activating the existing instance and terminating this one.", level: .warning)
             for app in runningApps {
                 if app != NSRunningApplication.current {
-                    app.activate(options: .activateIgnoringOtherApps)
+                    app.activate()
                     DispatchQueue.main.async {
                         NSApp.terminate(nil)
                     }
@@ -94,7 +94,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Register for drag-and-drop
         contentView.registerForDraggedTypes([.fileURL])
-        (contentView as? NSView)?.window?.registerForDraggedTypes([.fileURL])
+        contentView.window?.registerForDraggedTypes([.fileURL])
         
         installDeleteShortcutMonitor()
         installMouseNavigationMonitor()

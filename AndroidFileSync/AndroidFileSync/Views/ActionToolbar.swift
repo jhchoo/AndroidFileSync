@@ -106,8 +106,7 @@ struct ActionToolbar: View {
                 // Show loading indicator during action - flexible but won't grow infinitely
                 HStack(spacing: 6) {
                     ProgressView()
-                        .scaleEffect(0.6)
-                        .frame(width: 14, height: 14)
+                        .controlSize(.small)
                     Text(fileActionManager.currentAction)
                         .font(.caption)
                         .foregroundColor(.secondary)

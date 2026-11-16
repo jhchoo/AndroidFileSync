@@ -499,7 +499,7 @@ final class WirelessDiscovery: NSObject, NetServiceBrowserDelegate, NetServiceDe
         if pathMonitor == nil {
             receivedInitialPath = false
             let monitor = NWPathMonitor()
-            monitor.pathUpdateHandler = { [weak self] _ in
+            monitor.pathUpdateHandler = { [weak self, weak monitor] _ in
                 Task { @MainActor [weak self, weak monitor] in
                     guard let self, self.pathMonitor === monitor else { return }
                     // The first callback describes the interface we just started

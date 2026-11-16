@@ -5,7 +5,7 @@ import Foundation
 import AppKit
 internal import Combine
 import UniformTypeIdentifiers
-import UserNotifications
+@preconcurrency import UserNotifications
 
 @MainActor
 class AppManager: ObservableObject {
@@ -318,6 +318,7 @@ class AppManager: ObservableObject {
             if !pkg.isEmpty { pathMap[pkg] = apkPath }
         }
         guard !pathMap.isEmpty else { return [:] }
+        let resolvedPathMap = pathMap
 
         // ── Parse ls output → set of known package names ──────────────────────
         func parseLS(_ out: String) -> Set<String> {
@@ -330,9 +331,9 @@ class AppManager: ObservableObject {
 
         // ── Phase 2: APK stat + targeted du (only for packages that have dirs) ─
         // Run all 3 in parallel: stat-batches, data-du-batches, obb-du-batches
-        async let apkSizesTask  = batchStatAPKs(pathMap: pathMap, adbPath: adbPath)
+        async let apkSizesTask  = batchStatAPKs(pathMap: resolvedPathMap, adbPath: adbPath)
         async let dataSizesTask = batchDU(
-            packages: Array(packagesWithData.filter { pathMap[$0] != nil || true }),
+            packages: Array(packagesWithData.filter { resolvedPathMap[$0] != nil }),
             basePath: "/storage/emulated/0/Android/data",
             adbPath: adbPath)
         async let obbSizesTask  = batchDU(
@@ -778,7 +779,7 @@ class AppManager: ObservableObject {
             case .authorized, .provisional, .ephemeral:
                 send()
             case .notDetermined:
-                center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
                     if granted { send() }
                 }
             default:
@@ -907,7 +908,7 @@ class AppManager: ObservableObject {
         // Find all extracted .apk files recursively
         var apkPaths: [String] = []
         if let enumerator = fileManager.enumerator(at: tempDir, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
-            for case let fileURL as URL in enumerator {
+            while let fileURL = enumerator.nextObject() as? URL {
                 if fileURL.pathExtension.lowercased() == "apk" {
                     apkPaths.append(fileURL.path)
                 }

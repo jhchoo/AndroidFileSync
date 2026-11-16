@@ -60,7 +60,7 @@ struct FilePreviewPanel: View {
             pdfCoordinator.stopKeyMonitoring()
             quickLookCoordinator.stopKeyMonitoring()
         }
-        .onChange(of: previewManager.previewContent) { newContent in
+        .onChange(of: previewManager.previewContent) { _, newContent in
             if case .pdfReady = newContent {
                 pdfCoordinator.startKeyMonitoring()
                 quickLookCoordinator.stopKeyMonitoring()
@@ -1617,7 +1617,7 @@ struct PDFThumbnailSidebarView: View {
                     .padding(.horizontal, 12)
                 }
                 .background(Color(red: 0.14, green: 0.14, blue: 0.15))
-                .onChange(of: coordinator.currentPageIndex) { newIndex in
+                .onChange(of: coordinator.currentPageIndex) { _, newIndex in
                     withAnimation(.easeInOut(duration: 0.2)) {
                         proxy.scrollTo(newIndex, anchor: .center)
                     }

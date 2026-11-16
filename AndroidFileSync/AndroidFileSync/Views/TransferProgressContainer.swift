@@ -16,7 +16,7 @@ struct TransferProgressContainer: View {
     var body: some View {
         if uploadManager.isPreparing {
             HStack(spacing: 8) {
-                ProgressView().scaleEffect(0.7)
+                ProgressView().controlSize(.small)
                 Text(uploadManager.preparingMessage)
                     .font(.system(.callout, weight: .medium))
                     .foregroundColor(.orange)
@@ -27,7 +27,7 @@ struct TransferProgressContainer: View {
             .background(.regularMaterial)
         } else if downloadManager.isScanning {
             HStack(spacing: 8) {
-                ProgressView().scaleEffect(0.7)
+                ProgressView().controlSize(.small)
                 Text("Scanning \(downloadManager.scanningFolderName)...")
                     .font(.system(.callout, weight: .medium))
                     .foregroundColor(.orange)

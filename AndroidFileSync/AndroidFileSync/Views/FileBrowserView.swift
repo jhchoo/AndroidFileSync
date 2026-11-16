@@ -174,7 +174,7 @@ struct FileBrowserView: View {
                     .frame(height: 2.5)
             }
         }
-        .onChange(of: currentPath) { _ in
+        .onChange(of: currentPath) {
             selectionNavigator = FileSelectionNavigator()
         }
         .alert("Move \(fileToDelete?.name ?? "item") to Trash?", isPresented: $showDeleteConfirmation) {
@@ -1135,7 +1135,7 @@ struct FileBrowserView: View {
             sortOrder = expectedSortOrder
             DispatchQueue.main.async { isSyncingSortOrder = false }
         }
-        .onChange(of: sortOrder) { newOrder in
+        .onChange(of: sortOrder) { _, newOrder in
             // Column header was clicked → extract sort params → tell ContentView
             guard !isSyncingSortOrder else { return }
             guard let first = newOrder.first else { return }

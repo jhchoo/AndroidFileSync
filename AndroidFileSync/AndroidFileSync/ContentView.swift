@@ -474,7 +474,7 @@ struct ContentView: View {
     // Level 1: presentation modifiers (alerts + sheets + keyboard shortcuts)
     // Split from body to stay under Swift type-checker expression complexity limit
     private var contentWithPresentations: some View {
-        contentWithAlerts
+        contentWithObservers
             .sheet(isPresented: $showTrashView) {
                 TrashView(fileActionManager: fileActionManager, onStorageChanged: {
                     Task { 
@@ -613,7 +613,7 @@ struct ContentView: View {
             } message: {
                 Text(globalResultAlertMessage)
             }
-            .alert("Permanently Delete \(permanentDeleteCount) item\(permanentDeleteCount == 1 ? "" : "s")?", isPresented: $showPermanentDeleteConfirmation) {
+            .alert(permanentDeleteAlertTitle, isPresented: $showPermanentDeleteConfirmation) {
                 Button("Cancel", role: .cancel) {
                     permanentDeleteCount = 0
                 }
@@ -622,9 +622,9 @@ struct ContentView: View {
                     permanentDeleteCount = 0
                 }
             } message: {
-                Text("This cannot be undone. The item\(permanentDeleteCount == 1 ? " will" : "s will") be permanently removed from the device.")
+                Text(permanentDeleteAlertMessage)
             }
-            .alert("Move \(trashConfirmCount) item\(trashConfirmCount == 1 ? "" : "s") to Trash?", isPresented: $showTrashConfirmation) {
+            .alert(trashConfirmAlertTitle, isPresented: $showTrashConfirmation) {
                 Button("Cancel", role: .cancel) {
                     trashConfirmCount = 0
                 }
@@ -633,26 +633,31 @@ struct ContentView: View {
                     trashConfirmCount = 0
                 }
             } message: {
-                Text("You can restore \(trashConfirmCount == 1 ? "this item" : "these items") from the Trash.")
+                Text(trashConfirmAlertMessage)
             }
-            .onChange(of: fileActionManager.pasteConflicts.count) { newCount in
+    }
+
+    // Level 2b: lifecycle & device observer modifiers
+    private var contentWithDeviceObservers: some View {
+        contentWithAlerts
+            .onChange(of: fileActionManager.pasteConflicts.count) { _, newCount in
                 showConflictAlert = newCount > 0
             }
-            .onChange(of: fileActionManager.lastError) { newError in
+            .onChange(of: fileActionManager.lastError) { _, newError in
                 if let err = newError, !err.isEmpty, !showErrorAlert {
                     errorMessage = err
                     showErrorAlert = true
                 }
             }
-            .onChange(of: appManager.globalResultMessage) { newValue in
+            .onChange(of: appManager.globalResultMessage) { _, newValue in
                 guard let message = newValue, !message.isEmpty else { return }
                 globalResultAlertMessage = message
                 showGlobalResultAlert = true
             }
-            .onChange(of: deviceManager.sdCardPath) { newPath in
+            .onChange(of: deviceManager.sdCardPath) { _, newPath in
                 sidebarManager.updateSDCard(path: newPath)
             }
-            .onChange(of: deviceManager.internalStoragePath) { newPath in
+            .onChange(of: deviceManager.internalStoragePath) { _, newPath in
                 sidebarManager.updateInternalStorage(path: newPath)
                 fileActionManager.internalStoragePath = newPath
             }
@@ -686,7 +691,7 @@ struct ContentView: View {
                     await loadSecondaryFiles()
                 }
             }
-            .onChange(of: deviceManager.isConnected) { connected in
+            .onChange(of: deviceManager.isConnected) { _, connected in
                 if !connected {
                     // If the health monitor is actively reconnecting in the background,
                     // keep the last loaded files visible as a read-only snapshot on screen.
@@ -747,26 +752,31 @@ struct ContentView: View {
                     deviceManager.isTransferActive = self.isUploading || isDownloading
                 }
             }
-            .onChange(of: diagnosticsControl.isEnabled) { enabled in
+            .onChange(of: diagnosticsControl.isEnabled) { _, enabled in
                 deviceManager.setDiagnosticsEnabled(enabled)
             }
+    }
+
+    // Level 2c: file list observer modifiers
+    private var contentWithObservers: some View {
+        contentWithDeviceObservers
             // ── displayedFiles sync ─────────────────────────────────
             // Rebuild the sorted/filtered list when data or search changes.
-            .onChange(of: files) { _ in updateDisplayedFiles() }
-            .onChange(of: searchQuery) { _ in updateDisplayedFiles() }
-            .onChange(of: secondaryFiles) { _ in updateSecondaryDisplayedFiles() }
-            .onChange(of: secondarySearchQuery) { _ in updateSecondaryDisplayedFiles() }
-            .onChange(of: selectedFiles) { newSelection in
+            .onChange(of: files) { updateDisplayedFiles() }
+            .onChange(of: searchQuery) { updateDisplayedFiles() }
+            .onChange(of: secondaryFiles) { updateSecondaryDisplayedFiles() }
+            .onChange(of: secondarySearchQuery) { updateSecondaryDisplayedFiles() }
+            .onChange(of: selectedFiles) { _, newSelection in
                 if !newSelection.isEmpty {
                     activePane = .primary
                 }
             }
-            .onChange(of: secondarySelectedFiles) { newSelection in
+            .onChange(of: secondarySelectedFiles) { _, newSelection in
                 if !newSelection.isEmpty && isDualPaneEnabled {
                     activePane = .secondary
                 }
             }
-            .onChange(of: isDualPaneEnabled) { enabled in
+            .onChange(of: isDualPaneEnabled) { _, enabled in
                 if enabled {
                     if secondaryFiles.isEmpty {
                         secondaryPath = currentPath
@@ -774,15 +784,15 @@ struct ContentView: View {
                     }
                 }
             }
-            .onChange(of: activeAppFilter) { _ in
+            .onChange(of: activeAppFilter) {
                 searchQuery = ""
             }
-            .onChange(of: folderSizes) { _ in
+            .onChange(of: folderSizes) {
                 if sortOption == .size {
                     updateDisplayedFiles()
                 }
             }
-            .onChange(of: secondaryFolderSizes) { _ in
+            .onChange(of: secondaryFolderSizes) {
                 if secondarySortOption == .size {
                     updateSecondaryDisplayedFiles()
                 }
@@ -1004,7 +1014,7 @@ struct ContentView: View {
                 }
             }
         }
-        .onChange(of: deviceManager.isConnected) { connected in
+        .onChange(of: deviceManager.isConnected) { _, connected in
             if connected {
                 // Device connected — clear USB occupied banner
                 isUSBOccupied = false
@@ -1252,6 +1262,22 @@ struct ContentView: View {
             return "\"\(name)\" already exists at the destination. Replace it, keep both files, or skip?"
         }
         return "\(count) files already exist at the destination. Choose how to proceed for all of them."
+    }
+
+    private var permanentDeleteAlertTitle: String {
+        "Permanently Delete \(permanentDeleteCount) item\(permanentDeleteCount == 1 ? "" : "s")?"
+    }
+    
+    private var permanentDeleteAlertMessage: String {
+        "This cannot be undone. The item\(permanentDeleteCount == 1 ? " will" : "s will") be permanently removed from the device."
+    }
+    
+    private var trashConfirmAlertTitle: String {
+        "Move \(trashConfirmCount) item\(trashConfirmCount == 1 ? "" : "s") to Trash?"
+    }
+    
+    private var trashConfirmAlertMessage: String {
+        "You can restore \(trashConfirmCount == 1 ? "this item" : "these items") from the Trash."
     }
 
     // MARK: - Dual Pane Browser Sections
@@ -2528,7 +2554,7 @@ struct ContentView: View {
                     }
 
                     var folderFilesCount = 0
-                    for case let fileURL as URL in enumerator {
+                    while let fileURL = enumerator.nextObject() as? URL {
                         guard let rv = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey, .fileSizeKey]) else {
                             continue
                         }

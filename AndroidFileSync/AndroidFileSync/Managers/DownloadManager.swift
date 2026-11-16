@@ -5,6 +5,180 @@
 import Foundation
 internal import Combine
 
+
+// MARK: - Thread-Safe Concurrency & Progress Store
+
+nonisolated final class DownloadSyncState: @unchecked Sendable {
+    private let queueLock = NSLock()
+    private var pendingFiles: [DownloadManager.DownloadQueueItem] = []
+    private var isProcessingQueue: Bool = false
+    
+    private let activeRunningLock = NSLock()
+    private var activeRunningCount: Int = 0
+    private var activeRunningWeight: Double = 0.0
+    
+    private let taskLock = NSLock()
+    private var activeTasks: [String: Task<Void, Error>] = [:]
+    
+    private let progressLock = NSLock()
+    private var backgroundProgress: [String: (bytes: UInt64, speed: Double)] = [:]
+    private var internalBatchCompleted: Int = 0
+    
+    func getPendingCount() -> Int {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        return pendingFiles.count
+    }
+    
+    func appendPendingFiles(_ files: [DownloadManager.DownloadQueueItem]) -> Bool {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        pendingFiles.append(contentsOf: files)
+        let shouldStart = !isProcessingQueue
+        if shouldStart { isProcessingQueue = true }
+        return shouldStart
+    }
+    
+    func popPendingFile() -> DownloadManager.DownloadQueueItem? {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        return pendingFiles.isEmpty ? nil : pendingFiles.removeFirst()
+    }
+    
+    func prependPendingFile(_ file: DownloadManager.DownloadQueueItem) {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        pendingFiles.insert(file, at: 0)
+    }
+    
+    func hasPendingFiles() -> Bool {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        return !pendingFiles.isEmpty
+    }
+    
+    func removeAllPendingFiles() {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        pendingFiles.removeAll()
+    }
+    
+    func startProcessingQueueIfPending() -> Bool {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        let shouldStart = !isProcessingQueue && !pendingFiles.isEmpty
+        if shouldStart { isProcessingQueue = true }
+        return shouldStart
+    }
+    
+    func setProcessingQueue(_ processing: Bool) {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        isProcessingQueue = processing
+    }
+    
+    func getRunningCount() -> Int {
+        activeRunningLock.lock()
+        defer { activeRunningLock.unlock() }
+        return activeRunningCount
+    }
+    
+    func getRunningWeight() -> Double {
+        activeRunningLock.lock()
+        defer { activeRunningLock.unlock() }
+        return activeRunningWeight
+    }
+    
+    func incrementRunning(weight: Double) -> Int {
+        activeRunningLock.lock()
+        defer { activeRunningLock.unlock() }
+        activeRunningCount += 1
+        activeRunningWeight += weight
+        return activeRunningCount
+    }
+    
+    func decrementRunning(weight: Double) {
+        activeRunningLock.lock()
+        defer { activeRunningLock.unlock() }
+        activeRunningCount -= 1
+        activeRunningWeight = max(0.0, activeRunningWeight - weight)
+    }
+    
+    func setTask(_ task: Task<Void, Error>, forKey key: String) {
+        taskLock.lock()
+        defer { taskLock.unlock() }
+        activeTasks[key] = task
+    }
+    
+    func removeTask(forKey key: String) {
+        taskLock.lock()
+        defer { taskLock.unlock() }
+        activeTasks.removeValue(forKey: key)
+    }
+    
+    func cancelAndRemoveTask(forKey key: String) {
+        taskLock.lock()
+        defer { taskLock.unlock() }
+        if let task = activeTasks.removeValue(forKey: key) {
+            task.cancel()
+        }
+    }
+    
+    func cancelAndRemoveAllTasks() {
+        taskLock.lock()
+        let tasks = Array(activeTasks.values)
+        activeTasks.removeAll()
+        taskLock.unlock()
+        for task in tasks {
+            task.cancel()
+        }
+    }
+    
+    func updateProgress(key: String, bytes: UInt64, speed: Double) {
+        progressLock.lock()
+        defer { progressLock.unlock() }
+        backgroundProgress[key] = (bytes, speed)
+    }
+    
+    func removeProgress(key: String) {
+        progressLock.lock()
+        defer { progressLock.unlock() }
+        backgroundProgress.removeValue(forKey: key)
+    }
+    
+    func removeProgressKeys(_ keys: Set<String>) {
+        progressLock.lock()
+        defer { progressLock.unlock() }
+        for k in keys {
+            backgroundProgress.removeValue(forKey: k)
+        }
+    }
+    
+    func removeAllProgress() {
+        progressLock.lock()
+        defer { progressLock.unlock() }
+        backgroundProgress.removeAll()
+    }
+    
+    func resetBatchCompleted() {
+        progressLock.lock()
+        defer { progressLock.unlock() }
+        internalBatchCompleted = 0
+    }
+    
+    func incrementBatchCompleted() {
+        progressLock.lock()
+        defer { progressLock.unlock() }
+        internalBatchCompleted += 1
+    }
+    
+    func getProgressSnapshot() -> (updates: [String: (bytes: UInt64, speed: Double)], completed: Int) {
+        progressLock.lock()
+        defer { progressLock.unlock() }
+        return (backgroundProgress, internalBatchCompleted)
+    }
+}
+
 class DownloadManager: ObservableObject {
     @Published var activeDownloads: [String: DownloadProgress] = [:] {
         didSet {
@@ -42,32 +216,20 @@ class DownloadManager: ObservableObject {
         var retryCount: Int = 0
     }
     
-    // Download queue properties
-    private var pendingFiles: [DownloadQueueItem] = []
-    private let queueLock = NSLock()
-    private var isProcessingQueue = false
+    private nonisolated let syncState = DownloadSyncState()
     private var activeCongestionCap: Int = 10
     private var successStreak: Int = 0
-    private let activeRunningLock = NSLock()
-    private var activeRunningCount: Int = 0
-    private var activeRunningWeight: Double = 0.0
     
     var pendingQueueCount: Int {
-        queueLock.lock()
-        defer { queueLock.unlock() }
-        return pendingFiles.count
+        syncState.getPendingCount()
     }
     
     var runningTransfersCount: Int {
-        activeRunningLock.lock()
-        defer { activeRunningLock.unlock() }
-        return activeRunningCount
+        syncState.getRunningCount()
     }
     
     var runningTransfersWeight: Double {
-        activeRunningLock.lock()
-        defer { activeRunningLock.unlock() }
-        return activeRunningWeight
+        syncState.getRunningWeight()
     }
     
     /// Calculates dynamic slot weight based on file size
@@ -152,9 +314,7 @@ class DownloadManager: ObservableObject {
     // Batch cancellation
     private var isBatchCancelled: Bool = false
     
-    // Store active tasks for cancellation (Key: devicePath)
-    private var activeTasks: [String: Task<Void, Error>] = [:]
-    private let taskLock = NSLock()
+// Active tasks managed via syncState
     
     // App Nap / system sleep prevention — held while any download is active.
     // Without this, macOS may throttle or sleep the app during long transfers,
@@ -204,12 +364,7 @@ class DownloadManager: ObservableObject {
         transferActivity = nil
     }
     
-    // Thread-safe storage for progress updates from background
-    private let progressLock = NSLock()
-    private var backgroundProgress: [String: (bytes: UInt64, speed: Double)] = [:]
-    
-    // Throttled batch counter — updated in background, flushed to @Published by timer
-    private var internalBatchCompleted: Int = 0
+// Background progress and throttled batch counter managed via syncState
     
     // Coalesced removals to avoid per-file @Published updates during batch mode
     private var pendingRemovals: Set<String> = []
@@ -278,10 +433,7 @@ class DownloadManager: ObservableObject {
     }
     
     private func flushUIUpdates() {
-        progressLock.lock()
-        let updates = backgroundProgress
-        let completedSnapshot = internalBatchCompleted
-        progressLock.unlock()
+        let (updates, completedSnapshot) = syncState.getProgressSnapshot()
         
         for (devicePath, (bytes, speed)) in updates {
             internalActiveDownloads[devicePath]?.bytesTransferred = bytes
@@ -294,11 +446,7 @@ class DownloadManager: ObservableObject {
             for devicePath in removals {
                 internalActiveDownloads.removeValue(forKey: devicePath)
             }
-            progressLock.lock()
-            for devicePath in removals {
-                backgroundProgress.removeValue(forKey: devicePath)
-            }
-            progressLock.unlock()
+            syncState.removeProgressKeys(removals)
         }
         
         activeDownloads = internalActiveDownloads
@@ -318,12 +466,7 @@ class DownloadManager: ObservableObject {
         print("🛑 Cancelling download: \(devicePath)")
         
         // Cancel the task
-        taskLock.lock()
-        if let task = activeTasks[devicePath] {
-            task.cancel()
-            activeTasks.removeValue(forKey: devicePath)
-        }
-        taskLock.unlock()
+        syncState.cancelAndRemoveTask(forKey: devicePath)
         
         // Update UI state
         if var download = internalActiveDownloads[devicePath] {
@@ -349,9 +492,7 @@ class DownloadManager: ObservableObject {
             self.stopTimerIfNeeded()
             
             // Clear background progress
-            self.progressLock.lock()
-            self.backgroundProgress.removeValue(forKey: devicePath)
-            self.progressLock.unlock()
+            self.syncState.removeProgress(key: devicePath)
         }
     }
     
@@ -365,18 +506,8 @@ class DownloadManager: ObservableObject {
         isBatchCancelled = true
         
         // Drain the pending queue so nothing else starts
-        queueLock.lock()
-        pendingFiles.removeAll()
-        queueLock.unlock()
-        
-        taskLock.lock()
-        let allTasks = activeTasks
-        activeTasks.removeAll()
-        taskLock.unlock()
-        
-        for (_, task) in allTasks {
-            task.cancel()
-        }
+        syncState.removeAllPendingFiles()
+        syncState.cancelAndRemoveAllTasks()
         
         // Mark all as cancelled
         for key in internalActiveDownloads.keys {
@@ -393,9 +524,7 @@ class DownloadManager: ObservableObject {
             self.isBatchDownloading = false
             self.batchTotal = 0
             self.batchCompleted = 0
-            self.progressLock.lock()
-            self.internalBatchCompleted = 0
-            self.progressLock.unlock()
+            self.syncState.resetBatchCompleted()
             self.currentFolderName = ""
             self.isScanning = false
             self.scanningFolderName = ""
@@ -404,9 +533,7 @@ class DownloadManager: ObservableObject {
             
             self.uploadManager?.forceReevaluateConcurrencyLimit()
             
-            self.progressLock.lock()
-            self.backgroundProgress.removeAll()
-            self.progressLock.unlock()
+            self.syncState.removeAllProgress()
         }
     }
     
@@ -466,9 +593,7 @@ class DownloadManager: ObservableObject {
                 activeDownloads = internalActiveDownloads
             }
         }
-        progressLock.lock()
-        backgroundProgress.removeValue(forKey: devicePath)
-        progressLock.unlock()
+        syncState.removeProgress(key: devicePath)
     }
     
     private func isConnectionError(_ error: Error) -> Bool {
@@ -510,14 +635,15 @@ class DownloadManager: ObservableObject {
         // Prevent App Nap / system sleep during transfer
         beginPreventingSleep()
         
+        let progressStream = ADBManager.pullFileWithProgress(
+            devicePath: devicePath,
+            localPath: localPath
+        )
+        let sync = self.syncState
+        
         // Create and store the task for cancellation
-        let downloadTask = Task.detached { [weak self] in
+        let downloadTask = Task.detached { [weak self, sync, progressStream] in
             guard let self = self else { return }
-            
-            let progressStream = ADBManager.pullFileWithProgress(
-                devicePath: devicePath,
-                localPath: localPath
-            )
             
             do {
                 // Consume stream and update background storage
@@ -528,9 +654,7 @@ class DownloadManager: ObservableObject {
                         return
                     }
                     
-                    self.progressLock.lock()
-                    self.backgroundProgress[devicePath] = (bytesTransferred, speed)
-                    self.progressLock.unlock()
+                    sync.updateProgress(key: devicePath, bytes: bytesTransferred, speed: speed)
                 }
             } catch {
                 await self.markDownloadFailed(devicePath: devicePath, error: error)
@@ -543,9 +667,7 @@ class DownloadManager: ObservableObject {
             }
             
             // Clear background progress
-            self.progressLock.lock()
-            self.backgroundProgress.removeValue(forKey: devicePath)
-            self.progressLock.unlock()
+            sync.removeProgress(key: devicePath)
             
             // Preserve Android file timestamp as macOS creation date
             self.preserveTimestamp(at: localPath)
@@ -561,43 +683,37 @@ class DownloadManager: ObservableObject {
             }
             
             let batchActive = await MainActor.run { self.isBatchDownloading }
+            let delayNs: UInt64 = batchActive ? 300_000_000 : 1_000_000_000
             
-            Task.detached { [weak self] in
-                let delayNs: UInt64 = batchActive ? 300_000_000 : 1_000_000_000
+            Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: delayNs)
-                
-                await MainActor.run {
-                    guard let self = self else { return }
-                    if self.isBatchDownloading {
-                        self.pendingRemovals.insert(devicePath)
-                    } else {
-                        self.internalActiveDownloads.removeValue(forKey: devicePath)
-                        self.activeDownloads = self.internalActiveDownloads
-                        self.stopTimerIfNeeded()
-                    }
+                guard let self = self else { return }
+                if self.isBatchDownloading {
+                    self.pendingRemovals.insert(devicePath)
+                } else {
+                    self.internalActiveDownloads.removeValue(forKey: devicePath)
+                    self.activeDownloads = self.internalActiveDownloads
+                    self.stopTimerIfNeeded()
                 }
                 
-                let shouldEndSleep = await MainActor.run {
-                    !(self?.isBatchDownloading ?? false) && (self?.activeDownloads.isEmpty ?? true)
-                }
+                let shouldEndSleep = !self.isBatchDownloading && self.activeDownloads.isEmpty
                 if shouldEndSleep {
-                    self?.endPreventingSleep()
+                    self.endPreventingSleep()
                 }
             }
         }
         
         // Store the task for cancellation
-        taskLock.lock()
-        activeTasks[devicePath] = downloadTask
-        taskLock.unlock()
+        syncState.setTask(downloadTask, forKey: devicePath)
         
         // Wait for completion
-        try await downloadTask.value
-        
-        // Clean up task reference
-        taskLock.lock()
-        activeTasks.removeValue(forKey: devicePath)
-        taskLock.unlock()
+        do {
+            try await downloadTask.value
+            syncState.removeTask(forKey: devicePath)
+        } catch {
+            syncState.removeTask(forKey: devicePath)
+            throw error
+        }
     }
     
     // MARK: - Parallel Download Support
@@ -631,14 +747,15 @@ class DownloadManager: ObservableObject {
             startTimerIfNeeded()
         }
         
+        let progressStream = ADBManager.pullFileWithProgress(
+            devicePath: devicePath,
+            localPath: localPath
+        )
+        let sync = self.syncState
+        
         // Create and store the task for cancellation
-        let downloadTask = Task.detached { [weak self] in
+        let downloadTask = Task.detached { [weak self, sync, progressStream] in
             guard let self = self else { return }
-            
-            let progressStream = ADBManager.pullFileWithProgress(
-                devicePath: devicePath,
-                localPath: localPath
-            )
             
             do {
                 // Consume stream and update background storage
@@ -649,9 +766,7 @@ class DownloadManager: ObservableObject {
                         return
                     }
                     
-                    self.progressLock.lock()
-                    self.backgroundProgress[devicePath] = (bytesTransferred, speed)
-                    self.progressLock.unlock()
+                    sync.updateProgress(key: devicePath, bytes: bytesTransferred, speed: speed)
                 }
             } catch {
                 await self.markDownloadFailed(devicePath: devicePath, error: error)
@@ -664,9 +779,7 @@ class DownloadManager: ObservableObject {
             }
             
             // Clear background progress
-            self.progressLock.lock()
-            self.backgroundProgress.removeValue(forKey: devicePath)
-            self.progressLock.unlock()
+            sync.removeProgress(key: devicePath)
             
             // Preserve Android file timestamp as macOS creation date
             self.preserveTimestamp(at: localPath)
@@ -694,25 +807,19 @@ class DownloadManager: ObservableObject {
                     self.activeDownloads = self.internalActiveDownloads
                     self.stopTimerIfNeeded()
                 }
+                
+                let shouldEndSleep = !self.isBatchDownloading && self.internalActiveDownloads.isEmpty
+                if shouldEndSleep {
+                    self.endPreventingSleep()
+                }
             }
             
             // Clean up task reference
-            self.taskLock.lock()
-            self.activeTasks.removeValue(forKey: devicePath)
-            self.taskLock.unlock()
-            
-            let shouldEndSleep = await MainActor.run {
-                !self.isBatchDownloading && self.internalActiveDownloads.isEmpty
-            }
-            if shouldEndSleep {
-                self.endPreventingSleep()
-            }
+            sync.removeTask(forKey: devicePath)
         }
         
         // Store the task for cancellation
-        taskLock.lock()
-        activeTasks[devicePath] = downloadTask
-        taskLock.unlock()
+        syncState.setTask(downloadTask, forKey: devicePath)
         
         return downloadTask
     }
@@ -746,24 +853,19 @@ class DownloadManager: ObservableObject {
         
         guard !itemsToDownload.isEmpty else { return }
         
-        queueLock.lock()
         let items = itemsToDownload.map { DownloadQueueItem(devicePath: $0.devicePath, fileName: $0.fileName, fileSize: $0.fileSize, localPath: $0.localPath) }
-        pendingFiles.append(contentsOf: items)
-        let shouldStart = !isProcessingQueue
-        if shouldStart { isProcessingQueue = true }
-        queueLock.unlock()
+        let count = items.count
+        let shouldStart = syncState.appendPendingFiles(items)
         
         // Initialize batch tracking
         await MainActor.run {
             self.targetDeviceSerial = ADBManager.activeDeviceSerial
             if isBatchDownloading {
-                batchTotal += itemsToDownload.count
+                batchTotal += count
             } else {
                 currentBatchId = UUID()
-                batchTotal = itemsToDownload.count
-                progressLock.lock()
-                internalBatchCompleted = 0
-                progressLock.unlock()
+                batchTotal = count
+                self.syncState.resetBatchCompleted()
                 batchCompleted = 0
                 isAutoConcurrency = true
             }
@@ -806,11 +908,7 @@ class DownloadManager: ObservableObject {
     }
     
     func triggerProcessQueue(fixedMax: Int? = nil) {
-        queueLock.lock()
-        let shouldStart = !isProcessingQueue && !pendingFiles.isEmpty
-        if shouldStart { isProcessingQueue = true }
-        queueLock.unlock()
-        
+        let shouldStart = syncState.startProcessingQueueIfPending()
         if shouldStart {
             Task.detached(priority: .userInitiated) { [weak self] in
                 await self?.processQueue(fixedMax: fixedMax)
@@ -944,18 +1042,12 @@ class DownloadManager: ObservableObject {
                     }
                 }
                 
-                activeRunningLock.lock()
-                var running = activeRunningCount
-                activeRunningLock.unlock()
+                var running = syncState.getRunningCount()
                 
                 // Fill up to limit slots
                 var dispatchedThisRound = 0
                 while running < limit && !isBatchCancelled {
-                    queueLock.lock()
-                    let nextFile = pendingFiles.isEmpty ? nil : pendingFiles.removeFirst()
-                    queueLock.unlock()
-                    
-                    guard let file = nextFile else { break }
+                    guard let file = syncState.popPendingFile() else { break }
                     
                     let weight = slotWeight(for: file.fileSize)
                     
@@ -964,14 +1056,10 @@ class DownloadManager: ObservableObject {
                     // overwhelming WiFi ADB transport. With this guard, only 2 large videos
                     // run concurrently (2×2.0=4.0 ≤ 4), while 8 small files can still burst (8×0.5=4.0).
                     if isWireless {
-                        activeRunningLock.lock()
-                        let currentWeight = activeRunningWeight
-                        activeRunningLock.unlock()
+                        let currentWeight = syncState.getRunningWeight()
                         if currentWeight + weight > Double(limit) && running > 0 {
                             // Would exceed weight budget — put file back and stop dispatching
-                            queueLock.lock()
-                            pendingFiles.insert(file, at: 0)
-                            queueLock.unlock()
+                            syncState.prependPendingFile(file)
                             break
                         }
                     }
@@ -984,18 +1072,11 @@ class DownloadManager: ObservableObject {
                     }
                     dispatchedThisRound += 1
                     
-                    activeRunningLock.lock()
-                    activeRunningCount += 1
-                    activeRunningWeight += weight
-                    running = activeRunningCount
-                    activeRunningLock.unlock()
+                    running = syncState.incrementRunning(weight: weight)
                     
                     group.addTask {
                         defer {
-                            self.activeRunningLock.lock()
-                            self.activeRunningCount -= 1
-                            self.activeRunningWeight = max(0.0, self.activeRunningWeight - weight)
-                            self.activeRunningLock.unlock()
+                            self.syncState.decrementRunning(weight: weight)
                         }
                         
                         var didSucceed = false
@@ -1025,6 +1106,7 @@ class DownloadManager: ObservableObject {
                             var updatedFile = file
                             updatedFile.retryCount += 1
                             let newRetryCount = updatedFile.retryCount
+                            let fileToReenqueue = updatedFile
                             
                             // AIMD Multiplicative Decrease: Cut congestion cap on error/stall
                             let aimdEnabled = await MainActor.run { self.isAutoConcurrency }
@@ -1064,9 +1146,7 @@ class DownloadManager: ObservableObject {
                                         self.activeCongestionCap = max(2, self.activeCongestionCap / 2)
                                         self.successStreak = 0
                                     }
-                                    self.queueLock.lock()
-                                    self.pendingFiles.insert(updatedFile, at: 0)
-                                    self.queueLock.unlock()
+                                    self.syncState.prependPendingFile(fileToReenqueue)
                                 }
                                 connErrorOccurred = true
                                 
@@ -1099,9 +1179,7 @@ class DownloadManager: ObservableObject {
                         let currentId = await MainActor.run { self.currentBatchId }
                         if didSucceed || isItemCanc || (!isBatchCanc && !connErrorOccurred) {
                             if currentId == batchId {
-                                self.progressLock.lock()
-                                self.internalBatchCompleted += 1
-                                self.progressLock.unlock()
+                                self.syncState.incrementBatchCompleted()
                             }
                         }
                     }
@@ -1113,13 +1191,8 @@ class DownloadManager: ObservableObject {
                 }
                 
                 // Check if there's more work pending or running
-                queueLock.lock()
-                let hasMore = !pendingFiles.isEmpty
-                queueLock.unlock()
-                
-                activeRunningLock.lock()
-                let finalRunning = activeRunningCount
-                activeRunningLock.unlock()
+                let hasMore = syncState.hasPendingFiles()
+                let finalRunning = syncState.getRunningCount()
                 
                 if finalRunning == 0 && !hasMore {
                     break
@@ -1137,9 +1210,7 @@ class DownloadManager: ObservableObject {
             await group.waitForAll()
         }
         
-        queueLock.lock()
-        isProcessingQueue = false
-        queueLock.unlock()
+        syncState.setProcessingQueue(false)
         
         await MainActor.run {
             self.isBatchDownloading = false
@@ -1160,7 +1231,7 @@ class DownloadManager: ObservableObject {
     /// After `adb pull -a` completes, the local file's `modificationDate` matches the
     /// Android original, but macOS `creationDate` defaults to "now". This method copies
     /// `modificationDate` → `creationDate` so Finder's "Date Created" column is correct.
-    private func preserveTimestamp(at localPath: String) {
+    private nonisolated func preserveTimestamp(at localPath: String) {
         do {
             let attrs = try FileManager.default.attributesOfItem(atPath: localPath)
             if let modDate = attrs[.modificationDate] as? Date {
