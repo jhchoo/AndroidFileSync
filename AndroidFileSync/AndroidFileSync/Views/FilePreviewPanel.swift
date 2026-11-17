@@ -622,8 +622,11 @@ final class PDFPreviewCoordinator: ObservableObject {
 
     func startKeyMonitoring() {
         stopKeyMonitoring()
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .scrollWheel]) { [weak self] event in
             guard let self = self else { return event }
+            if event.type == .scrollWheel {
+                return self.handleScrollWheel(event)
+            }
             return self.handleKeyDown(event)
         }
     }
@@ -705,6 +708,113 @@ final class PDFPreviewCoordinator: ObservableObject {
         }
     }
 
+    /// Ctrl + 마우스 휠(커서 기준 확대/축소) 및 Option(Alt) + 휠(3배 빠른 스크롤) 처리
+    private func handleScrollWheel(_ event: NSEvent) -> NSEvent? {
+        guard let pdfView = currentPDFView, pdfView.document != nil else {
+            return event
+        }
+        guard let window = pdfView.window, window.isKeyWindow else {
+            return event
+        }
+        guard NSApp.modalWindow == nil, window.attachedSheet == nil else {
+            return event
+        }
+        guard event.window == nil || event.window === window else {
+            return event
+        }
+
+        let locationInWindow = event.window === window
+            ? event.locationInWindow
+            : window.convertPoint(fromScreen: NSEvent.mouseLocation)
+        let cursorInPDFView = pdfView.convert(locationInWindow, from: nil)
+        guard pdfView.bounds.contains(cursorInPDFView) else {
+            return event
+        }
+
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+        // Option(Alt) + 스크롤: 3배 빠른 스크롤
+        if flags.contains(.option) && flags.intersection([.command, .control, .shift]).isEmpty {
+            return handleFastScroll(event, in: pdfView)
+        }
+
+        // Ctrl + 스크롤: 커서 기준 확대/축소
+        guard flags.contains(.control) && flags.intersection([.command, .option, .shift]).isEmpty else {
+            return event
+        }
+
+        // 트랙패드/매직 마우스 관성 스크롤로 인한 과도한 연속 줌 방지
+        guard event.momentumPhase.isEmpty else {
+            return nil
+        }
+
+        // macOS 자연스러운 스크롤 설정과 무관하게 물리적 휠 방향 기준 적용:
+        // 앞으로 밀기(위로 굴리기) -> 양수(확대), 몸 쪽으로 당기기(아래로 굴리기) -> 음수(축소)
+        let directionMultiplier: CGFloat = event.isDirectionInvertedFromDevice ? -1.0 : 1.0
+        let rawSourceDelta = abs(event.scrollingDeltaY) > 0.0001 ? event.scrollingDeltaY : event.deltaY
+        let rawDeltaY = rawSourceDelta * directionMultiplier
+        guard abs(rawDeltaY) > 0.0001 else {
+            return nil
+        }
+
+        let zoomExponent: CGFloat
+        if event.hasPreciseScrollingDeltas {
+            zoomExponent = max(-0.35, min(0.35, rawDeltaY * 0.005))
+        } else {
+            let effectiveDelta = abs(rawDeltaY) < 0.5 ? copysign(0.5, rawDeltaY) : rawDeltaY
+            zoomExponent = max(-0.35, min(0.35, effectiveDelta * 0.12))
+        }
+
+        let currentScale = pdfView.scaleFactor
+        let minScale = max(pdfView.minScaleFactor, 0.1)
+        let maxScale = max(minScale, pdfView.maxScaleFactor)
+        let targetScale = max(minScale, min(maxScale, currentScale * exp(zoomExponent)))
+
+        guard abs(targetScale - currentScale) > 0.0001 else {
+            return nil
+        }
+
+        zoom(pdfView: pdfView, to: targetScale, anchoredAt: cursorInPDFView)
+        return nil
+    }
+
+    /// Option(Alt) + 스크롤 시 기본 스크롤 속도의 3배로 이동
+    private func handleFastScroll(_ event: NSEvent, in pdfView: PDFView) -> NSEvent? {
+        guard let scrollView = findScrollView(in: pdfView) else {
+            return event
+        }
+        let clipView = scrollView.contentView
+        let speedMultiplier: CGFloat = 3.0
+
+        let rawDeltaX = abs(event.scrollingDeltaX) > 0.0001 ? event.scrollingDeltaX : event.deltaX
+        let rawDeltaY = abs(event.scrollingDeltaY) > 0.0001 ? event.scrollingDeltaY : event.deltaY
+
+        let lineScrollX = scrollView.horizontalLineScroll > 0 ? scrollView.horizontalLineScroll : 10.0
+        let lineScrollY = scrollView.verticalLineScroll > 0 ? scrollView.verticalLineScroll : 10.0
+
+        let deltaX = (event.hasPreciseScrollingDeltas ? rawDeltaX : rawDeltaX * lineScrollX) * speedMultiplier
+        let deltaY = (event.hasPreciseScrollingDeltas ? rawDeltaY : rawDeltaY * lineScrollY) * speedMultiplier
+
+        guard abs(deltaX) > 0.0001 || abs(deltaY) > 0.0001 else {
+            return nil
+        }
+
+        var newOrigin = clipView.bounds.origin
+        newOrigin.x -= deltaX
+        if clipView.isFlipped {
+            newOrigin.y -= deltaY
+        } else {
+            newOrigin.y += deltaY
+        }
+
+        let constrainedOrigin = clipView.constrainBoundsRect(
+            NSRect(origin: newOrigin, size: clipView.bounds.size)
+        ).origin
+        clipView.scroll(to: constrainedOrigin)
+        scrollView.reflectScrolledClipView(clipView)
+        return nil
+    }
+
     /// PDF 내부 NSScrollView를 찾아 지정된 deltaY(pt)만큼 스크롤
     func scrollContent(deltaY: CGFloat) {
         guard let pdfView = currentPDFView else { return }
@@ -762,10 +872,7 @@ final class PDFPreviewCoordinator: ObservableObject {
 
     func attach(pdfView: PDFView, documentKey: String?) {
         self.currentPDFView = pdfView
-        self.document = pdfView.document
         self.documentKey = documentKey
-        self.scaleFactor = pdfView.scaleFactor
-        updatePages()
 
         NotificationCenter.default.removeObserver(self, name: .PDFViewPageChanged, object: nil)
         NotificationCenter.default.addObserver(
@@ -796,12 +903,23 @@ final class PDFPreviewCoordinator: ObservableObject {
         }
 
         startKeyMonitoring()
-        restoreSavedLocationIfAvailable()
+
+        // SwiftUI 뷰 업데이트 사이클 중 @Published 변경 경고를 방지하기 위해 비동기로 상태 동기화 및 위치 복원
+        DispatchQueue.main.async { [weak self, weak pdfView] in
+            guard let self = self,
+                  let pdfView = pdfView,
+                  self.currentPDFView === pdfView else { return }
+            self.updatePages()
+            self.restoreSavedLocationIfAvailable()
+        }
     }
 
     @objc private func handleBoundsChanged(_ note: Notification) {
-        updateCurrentPageFromViewport()
-        saveCurrentLocation()
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.updateCurrentPageFromViewport()
+            self.saveCurrentLocation()
+        }
     }
 
     /// 현재 뷰포트에 가장 많이 보이거나 중심에 위치한 페이지를 감지하여 currentPageIndex 동기화
@@ -868,17 +986,23 @@ final class PDFPreviewCoordinator: ObservableObject {
         let targetIndex = min(max(0, location.pageIndex), doc.pageCount - 1)
         if let page = doc.page(at: targetIndex) {
             pdfView.go(to: page)
-            self.currentPageIndex = targetIndex
+            if self.currentPageIndex != targetIndex {
+                self.currentPageIndex = targetIndex
+            }
         }
 
         if let savedScale = location.scaleFactor, savedScale > 0.1 {
+            let targetScale = CGFloat(savedScale)
             pdfView.autoScales = false
-            pdfView.scaleFactor = CGFloat(savedScale)
-            self.scaleFactor = CGFloat(savedScale)
+            pdfView.scaleFactor = targetScale
+            if abs(self.scaleFactor - targetScale) > 0.001 {
+                self.scaleFactor = targetScale
+            }
         }
 
         if let scrollView = findScrollView(in: pdfView) {
             DispatchQueue.main.async {
+                pdfView.layoutDocumentView()
                 let clipView = scrollView.contentView
                 var origin = clipView.bounds.origin
                 if let savedOffsetX = location.scrollOffsetX {
@@ -916,37 +1040,51 @@ final class PDFPreviewCoordinator: ObservableObject {
     }
 
     func updatePages() {
-        guard let doc = currentPDFView?.document else { return }
-        self.document = doc
-        self.pageCount = max(doc.pageCount, 1)
-        if let current = currentPDFView?.currentPage {
+        guard let pdfView = currentPDFView,
+              let doc = pdfView.document else { return }
+        if self.document !== doc {
+            self.document = doc
+        }
+        let newPageCount = max(doc.pageCount, 1)
+        if self.pageCount != newPageCount {
+            self.pageCount = newPageCount
+        }
+        if let current = pdfView.currentPage {
             let idx = doc.index(for: current)
-            if idx >= 0 && idx < doc.pageCount {
+            if idx >= 0 && idx < doc.pageCount && self.currentPageIndex != idx {
                 self.currentPageIndex = idx
             }
         }
-        if let pdfView = currentPDFView {
+        if abs(self.scaleFactor - pdfView.scaleFactor) > 0.001 {
             self.scaleFactor = pdfView.scaleFactor
         }
     }
 
     @objc private func handlePageChanged(_ note: Notification) {
-        guard let doc = currentPDFView?.document, let current = currentPDFView?.currentPage else { return }
-        let idx = doc.index(for: current)
-        if idx >= 0 && idx < doc.pageCount && self.currentPageIndex != idx {
-            self.currentPageIndex = idx
-            saveCurrentLocation()
-        }
-        if self.pageCount != doc.pageCount {
-            self.pageCount = max(doc.pageCount, 1)
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let doc = self.currentPDFView?.document,
+                  let current = self.currentPDFView?.currentPage else { return }
+            let idx = doc.index(for: current)
+            if idx >= 0 && idx < doc.pageCount && self.currentPageIndex != idx {
+                self.currentPageIndex = idx
+                self.saveCurrentLocation()
+            }
+            let newPageCount = max(doc.pageCount, 1)
+            if self.pageCount != newPageCount {
+                self.pageCount = newPageCount
+            }
         }
     }
 
     @objc private func handleScaleChanged(_ note: Notification) {
-        guard let pdfView = currentPDFView else { return }
-        if abs(self.scaleFactor - pdfView.scaleFactor) > 0.001 {
-            self.scaleFactor = pdfView.scaleFactor
-            saveCurrentLocation()
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let pdfView = self.currentPDFView else { return }
+            if abs(self.scaleFactor - pdfView.scaleFactor) > 0.001 {
+                self.scaleFactor = pdfView.scaleFactor
+                self.saveCurrentLocation()
+            }
         }
     }
 
@@ -990,6 +1128,57 @@ final class PDFPreviewCoordinator: ObservableObject {
         pdfView.autoScales = false
         pdfView.scaleFactor = 1.0
         self.scaleFactor = 1.0
+    }
+
+    /// 마우스 커서 위치(cursorInPDFView)를 기준점(transform-origin)으로 PDF 배율 변경
+    func zoom(pdfView: PDFView, to targetScale: CGFloat, anchoredAt cursorInPDFView: CGPoint) {
+        // 줌 전 커서 아래 PDFPage 좌표(72dpi 불변 좌표) 기록
+        let anchorPage = pdfView.page(for: cursorInPDFView, nearest: true)
+        let anchorPagePoint = anchorPage.map { pdfView.convert(cursorInPDFView, to: $0) }
+
+        let scrollView = findScrollView(in: pdfView)
+        let oldScale = pdfView.scaleFactor
+        let oldDocPoint = scrollView?.contentView.documentView.map { docView in
+            pdfView.convert(cursorInPDFView, to: docView)
+        }
+
+        pdfView.autoScales = false
+        pdfView.scaleFactor = targetScale
+        self.scaleFactor = pdfView.scaleFactor
+        pdfView.layoutDocumentView()
+
+        if let scrollView = scrollView {
+            let clipView = scrollView.contentView
+            let currentCursorInClip = clipView.convert(cursorInPDFView, from: pdfView)
+
+            let targetPointInClip: CGPoint?
+            if let page = anchorPage, let pagePoint = anchorPagePoint {
+                let targetInPDFView = pdfView.convert(pagePoint, from: page)
+                targetPointInClip = clipView.convert(targetInPDFView, from: pdfView)
+            } else if let oldDocPoint = oldDocPoint,
+                      let docView = clipView.documentView,
+                      oldScale > 0 {
+                let ratio = pdfView.scaleFactor / oldScale
+                let scaledDocPoint = CGPoint(x: oldDocPoint.x * ratio, y: oldDocPoint.y * ratio)
+                targetPointInClip = clipView.convert(scaledDocPoint, from: docView)
+            } else {
+                targetPointInClip = nil
+            }
+
+            if let targetInClip = targetPointInClip {
+                var desiredOrigin = clipView.bounds.origin
+                desiredOrigin.x += targetInClip.x - currentCursorInClip.x
+                desiredOrigin.y += targetInClip.y - currentCursorInClip.y
+                let constrainedOrigin = clipView.constrainBoundsRect(
+                    NSRect(origin: desiredOrigin, size: clipView.bounds.size)
+                ).origin
+                clipView.scroll(to: constrainedOrigin)
+                scrollView.reflectScrolledClipView(clipView)
+            }
+        }
+
+        updateCurrentPageFromViewport()
+        saveCurrentLocation()
     }
 
     func fitToWidth() {
