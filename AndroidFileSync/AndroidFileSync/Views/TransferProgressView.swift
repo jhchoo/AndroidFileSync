@@ -8,7 +8,6 @@
 import SwiftUI
 
 // Simple data structure for transfer items
-// 커밋 테스트
 struct TransferItemData: Identifiable, Equatable {
     let id: String
     let fileName: String
